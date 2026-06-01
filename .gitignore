@@ -1,0 +1,5 @@
+.claude/
+*.pyc
+__pycache__/
+history.db
+config.json
