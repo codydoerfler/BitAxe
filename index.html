@@ -950,7 +950,7 @@
       <div class="tickets-rate" id="energy-rate">&nbsp;</div>
     </div>
     <div class="tickets-chart-wrap">
-      <div class="tickets-chart-label">Energy Used per Day — Last 7 Days <span class="info" data-tip="Total electricity consumed each day (kWh). The tooltip on each bar also shows estimated cost at your power rate.">i</span></div>
+      <div class="tickets-chart-label">Energy Used per Day — Last 7 Days <span class="info" data-tip="Total electricity used each day (kWh). Hover a bar for that day's cost — priced with your time-of-use plan, where on-peak (weekday 5–9 PM) runs ~2.7× the off-peak rate.">i</span></div>
       <div class="tickets-bar-area"><canvas id="chart-energy"></canvas></div>
     </div>
   </div>
@@ -1482,7 +1482,7 @@
   let ticketAnimFrame = null;
 
   let energyChart = null;
-  const ELECTRICITY_RATE = 0.13;  // $/kWh — set this to your local power rate for cost estimates
+  let energyCosts = [];  // per-day cost ($), time-of-use-aware, computed by the backend
 
   function initTicketsChart() {
     const ctx = document.getElementById('chart-tickets').getContext('2d');
@@ -1578,7 +1578,10 @@
             titleColor: '#8892a4',
             bodyColor: '#e2e8f0',
             callbacks: {
-              label: ctx => `${ctx.parsed.y.toFixed(2)} kWh  ·  ~$${(ctx.parsed.y * ELECTRICITY_RATE).toFixed(2)}`
+              label: ctx => {
+                const c = energyCosts[ctx.dataIndex];
+                return `${ctx.parsed.y.toFixed(2)} kWh` + (c != null ? `  ·  ~$${c.toFixed(2)}` : '');
+              }
             }
           }
         },
@@ -1601,6 +1604,7 @@
         return new Date(p[0], p[1]-1, p[2])
           .toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       });
+      energyCosts = data.costs || [];
       energyChart.data.labels = labels;
       energyChart.data.datasets[0].data = data.counts;
       energyChart.data.datasets[0].backgroundColor = data.counts.map(
@@ -1609,10 +1613,13 @@
       energyChart.update();
 
       document.getElementById('energy-today').textContent = (data.today ?? 0).toFixed(2);
-      const proj = data.projected || 0;
-      document.getElementById('energy-rate').textContent = proj
-        ? `≈ ${proj.toFixed(2)} kWh/day  ·  ~$${(proj * ELECTRICITY_RATE).toFixed(2)}/day`
-        : '';
+      const onpeak = data.now_onpeak;
+      const badge = `<div style="margin-top:6px;font-size:11px;color:var(--subtle)">`
+        + `<span style="color:${onpeak ? 'var(--red)' : 'var(--green)'}">●</span> `
+        + `Now: ${onpeak ? 'On-peak' : 'Off-peak'} · $${(data.now_rate ?? 0).toFixed(3)}/kWh</div>`;
+      document.getElementById('energy-rate').innerHTML =
+        `~$${(data.today_cost ?? 0).toFixed(2)} today  ·  ≈ $${(data.projected_cost ?? 0).toFixed(2)}/day`
+        + badge;
     } catch (_) {}
   }
 

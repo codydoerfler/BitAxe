@@ -19,6 +19,11 @@ DB_PATH = os.path.join(DIR, "history.db")
 
 POLL_INTERVAL = 60  # seconds between readings
 
+# Time-of-use electricity rates ($/kWh). On-peak = non-holiday weekdays 5–9 PM.
+# (Off-peak ≈ on-peak ÷ 2.7. Summer = Jun–Sep, winter = rest.)
+RATE_SUMMER = {"on": 0.213, "off": 0.079}
+RATE_WINTER = {"on": 0.184, "off": 0.068}
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -284,46 +289,68 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if miner_idx >= len(cfg["miners"]):
             return self._respond(404, {"error": "miner not found"})
         miner_ip = cfg["miners"][miner_idx]["ip"]
-        conn     = sqlite3.connect(DB_PATH)
-        cur      = conn.cursor()
+        import datetime
 
-        # daily energy for past 7 days — each reading represents POLL_INTERVAL seconds
-        cur.execute("""
+        # on-peak = weekday (Mon–Fri = strftime %w 1–5), local hour 17–20 (5–9 PM)
+        ON = ("CAST(strftime('%w', ts, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 1 AND 5 "
+              "AND CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 17 AND 20")
+
+        conn = sqlite3.connect(DB_PATH)
+        cur  = conn.cursor()
+        # split each day's power into on-peak / off-peak sums
+        cur.execute(f"""
             SELECT date(ts, 'unixepoch', 'localtime') AS day,
-                   SUM(power) AS p_sum, AVG(power) AS p_avg
-            FROM readings
-            WHERE miner_ip = ? AND ts > ?
-            GROUP BY day
-            ORDER BY day
+                   SUM(CASE WHEN {ON} THEN power ELSE 0 END) AS p_on,
+                   SUM(CASE WHEN {ON} THEN 0 ELSE power END) AS p_off
+            FROM readings WHERE miner_ip = ? AND ts > ?
+            GROUP BY day ORDER BY day
         """, (miner_ip, int(time.time()) - 7 * 86400))
         rows = cur.fetchall()
 
-        import datetime
         midnight = int(datetime.datetime.combine(
             datetime.date.today(), datetime.time.min).timestamp())
-        cur.execute("""
-            SELECT SUM(power), AVG(power)
+        cur.execute(f"""
+            SELECT SUM(CASE WHEN {ON} THEN power ELSE 0 END),
+                   SUM(CASE WHEN {ON} THEN 0 ELSE power END),
+                   AVG(power)
             FROM readings WHERE miner_ip = ? AND ts >= ?
         """, (miner_ip, midnight))
-        today_row = cur.fetchone()
+        t_on, t_off, t_avg = cur.fetchone()
         conn.close()
 
-        def kwh(p_sum):
-            # kWh = watts * seconds / 3,600,000 ; each reading covers POLL_INTERVAL s
-            return (p_sum * POLL_INTERVAL / 3_600_000) if p_sum else 0.0
+        def kwh(p):       # each reading covers POLL_INTERVAL seconds
+            return (p * POLL_INTERVAL / 3_600_000) if p else 0.0
+        def rates(day):   # summer = Jun–Sep
+            return RATE_SUMMER if 6 <= int(day.split("-")[1]) <= 9 else RATE_WINTER
 
-        days, counts = [], []
-        for day, p_sum, p_avg in rows:
+        days, counts, costs = [], [], []
+        for day, p_on, p_off in rows:
+            r = rates(day)
+            on_k, off_k = kwh(p_on), kwh(p_off)
             days.append(day)
-            counts.append(round(kwh(p_sum), 3))
+            counts.append(round(on_k + off_k, 3))
+            costs.append(round(on_k * r["on"] + off_k * r["off"], 2))
 
-        today_psum, today_pavg = today_row if today_row else (None, None)
+        today  = datetime.date.today()
+        r      = rates(today.isoformat())
+        avg_w  = t_avg or 0
+        is_wd  = today.weekday() < 5
+        # projected full-day cost at today's avg draw (weekday = 4 h on-peak + 20 h off)
+        proj_cost = (avg_w*4/1000)*r["on"] + (avg_w*20/1000)*r["off"] if is_wd \
+                    else (avg_w*24/1000)*r["off"]
+
+        now    = datetime.datetime.now()
+        now_on = now.weekday() < 5 and 17 <= now.hour <= 20
         self._respond(200, {
-            "days":      days,
-            "counts":    counts,
-            "today":     round(kwh(today_psum), 3),
-            "projected": round((today_pavg or 0) * 24 / 1000, 3),  # full-day kWh at today's avg draw
-            "avg_w":     round(today_pavg, 1) if today_pavg else None,
+            "days":           days,
+            "counts":         counts,
+            "costs":          costs,
+            "today":          round(kwh(t_on) + kwh(t_off), 3),
+            "today_cost":     round(kwh(t_on) * r["on"] + kwh(t_off) * r["off"], 2),
+            "projected":      round(avg_w * 24 / 1000, 3),
+            "projected_cost": round(proj_cost, 2),
+            "now_onpeak":     now_on,
+            "now_rate":       r["on"] if now_on else r["off"],
         })
 
     def _get_history(self):
