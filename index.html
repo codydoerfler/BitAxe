@@ -944,13 +944,13 @@
   <!-- Energy usage live counter + 7-day bar chart -->
   <div class="tickets-card" style="margin-top:16px;">
     <div class="tickets-live">
-      <div class="tickets-icon">⚡</div>
-      <div class="tickets-count" id="energy-today" style="color:var(--blue)">—</div>
-      <div class="tickets-label">kWh Today <span class="info" data-tip="Electricity the miner has used since midnight, in kilowatt-hours — computed from its power draw over time.">i</span></div>
+      <div class="tickets-icon">💵</div>
+      <div class="tickets-count" id="energy-today" style="color:var(--green)">—</div>
+      <div class="tickets-label">Cost Today <span class="info" data-tip="What the miner's electricity has cost since midnight, priced with your time-of-use rates. Energy used (kWh) is shown below.">i</span></div>
       <div class="tickets-rate" id="energy-rate">&nbsp;</div>
     </div>
     <div class="tickets-chart-wrap">
-      <div class="tickets-chart-label">Energy Used per Day — Last 7 Days <span class="info" data-tip="Bars show daily kWh; the green line is the running cumulative cost across the window. Hover for each day's cost — priced with your time-of-use plan (on-peak weekday 5–9 PM ≈ 2.7× off-peak).">i</span><span id="energy-total" style="float:right;color:var(--green);font-weight:600;">—</span></div>
+      <div class="tickets-chart-label">Energy Cost per Day — Last 7 Days <span class="info" data-tip="Bars show each day's electricity cost; the green line is the running cumulative cost. Hover a bar for its cost and kWh — priced with your time-of-use plan (on-peak weekday 5–9 PM ≈ 2.7× off-peak).">i</span><span id="energy-total" style="float:right;color:var(--green);font-weight:600;">—</span></div>
       <div class="tickets-bar-area"><canvas id="chart-energy"></canvas></div>
     </div>
   </div>
@@ -1482,7 +1482,8 @@
   let ticketAnimFrame = null;
 
   let energyChart = null;
-  let energyCosts = [];  // per-day cost ($), time-of-use-aware, computed by the backend
+  let energyCosts = [];  // per-day cost ($), time-of-use-aware, from the backend
+  let energyKwh   = [];  // per-day energy (kWh), shown as secondary detail
 
   function initTicketsChart() {
     const ctx = document.getElementById('chart-tickets').getContext('2d');
@@ -1593,8 +1594,8 @@
               label: ctx => {
                 if (ctx.dataset.type === 'line')
                   return `Cumulative: $${ctx.parsed.y.toFixed(2)}`;
-                const c = energyCosts[ctx.dataIndex];
-                return `${ctx.parsed.y.toFixed(2)} kWh` + (c != null ? `  ·  ~$${c.toFixed(2)}` : '');
+                const k = energyKwh[ctx.dataIndex];
+                return `$${ctx.parsed.y.toFixed(2)}` + (k != null ? `  ·  ${k.toFixed(2)} kWh` : '');
               }
             }
           }
@@ -1602,7 +1603,7 @@
         scales: {
           x:  { grid: { color: '#1a1d26' }, ticks: { color: '#8892a4' } },
           y:  { position: 'left', grid: { color: '#1a1d26' },
-                ticks: { color: '#8892a4', callback: v => v + ' kWh' } },
+                ticks: { color: '#8892a4', callback: v => '$' + v.toFixed(2) } },
           y1: { position: 'right', grid: { display: false },
                 ticks: { color: '#22c55e', callback: v => '$' + v.toFixed(2) } }
         }
@@ -1620,14 +1621,15 @@
         return new Date(p[0], p[1]-1, p[2])
           .toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       });
-      energyCosts = data.costs || [];
+      energyCosts = data.costs  || [];
+      energyKwh   = data.counts || [];
       // running cumulative cost over the visible window
       let cum = 0;
       const cumulative = (data.costs || []).map(c => +(cum += c).toFixed(2));
       energyChart.data.labels = labels;
-      energyChart.data.datasets[0].data = data.counts;
-      energyChart.data.datasets[0].backgroundColor = data.counts.map(
-        (_, i) => i === data.counts.length - 1 ? 'rgba(59,130,246,0.55)' : 'rgba(59,130,246,0.2)'
+      energyChart.data.datasets[0].data = data.costs;   // bars now show daily COST ($)
+      energyChart.data.datasets[0].backgroundColor = (data.costs || []).map(
+        (_, i) => i === data.costs.length - 1 ? 'rgba(59,130,246,0.55)' : 'rgba(59,130,246,0.2)'
       );
       energyChart.data.datasets[1].data = cumulative;
       energyChart.update();
@@ -1636,13 +1638,14 @@
       if (totalEl) totalEl.textContent =
         `Total: $${(data.total_cost ?? 0).toFixed(2)} · ${(data.total_kwh ?? 0).toFixed(1)} kWh`;
 
-      document.getElementById('energy-today').textContent = (data.today ?? 0).toFixed(2);
+      // headline = cost today; kWh becomes secondary
+      document.getElementById('energy-today').textContent = `$${(data.today_cost ?? 0).toFixed(2)}`;
       const onpeak = data.now_onpeak;
       const badge = `<div style="margin-top:6px;font-size:11px;color:var(--subtle)">`
         + `<span style="color:${onpeak ? 'var(--red)' : 'var(--green)'}">●</span> `
         + `Now: ${onpeak ? 'On-peak' : 'Off-peak'} · $${(data.now_rate ?? 0).toFixed(3)}/kWh</div>`;
       document.getElementById('energy-rate').innerHTML =
-        `~$${(data.today_cost ?? 0).toFixed(2)} today  ·  ≈ $${(data.projected_cost ?? 0).toFixed(2)}/day`
+        `${(data.today ?? 0).toFixed(2)} kWh today  ·  ≈ $${(data.projected_cost ?? 0).toFixed(2)}/day`
         + badge;
     } catch (_) {}
   }
