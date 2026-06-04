@@ -297,14 +297,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         conn = sqlite3.connect(DB_PATH)
         cur  = conn.cursor()
-        # split each day's power into on-peak / off-peak sums
+        # split each day's power into on-peak / off-peak sums (all history)
         cur.execute(f"""
             SELECT date(ts, 'unixepoch', 'localtime') AS day,
                    SUM(CASE WHEN {ON} THEN power ELSE 0 END) AS p_on,
                    SUM(CASE WHEN {ON} THEN 0 ELSE power END) AS p_off
-            FROM readings WHERE miner_ip = ? AND ts > ?
+            FROM readings WHERE miner_ip = ?
             GROUP BY day ORDER BY day
-        """, (miner_ip, int(time.time()) - 7 * 86400))
+        """, (miner_ip,))
         rows = cur.fetchall()
 
         midnight = int(datetime.datetime.combine(
@@ -331,6 +331,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             counts.append(round(on_k + off_k, 3))
             costs.append(round(on_k * r["on"] + off_k * r["off"], 2))
 
+        # all-time cumulative totals, then keep the last 7 days for the chart
+        total_kwh  = round(sum(counts), 3)
+        total_cost = round(sum(costs), 2)
+        since      = days[0] if days else None
+        days, counts, costs = days[-7:], counts[-7:], costs[-7:]
+
         today  = datetime.date.today()
         r      = rates(today.isoformat())
         avg_w  = t_avg or 0
@@ -351,6 +357,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "projected_cost": round(proj_cost, 2),
             "now_onpeak":     now_on,
             "now_rate":       r["on"] if now_on else r["off"],
+            "total_cost":     total_cost,
+            "total_kwh":      total_kwh,
+            "since":          since,
         })
 
     def _get_history(self):
