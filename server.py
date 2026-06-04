@@ -173,6 +173,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._get_history()
         elif p == "/api/tickets":
             self._get_tickets()
+        elif p == "/api/energy":
+            self._get_energy()
         elif re.match(r"^/api/miner/\d+/", self.path):
             self._miner_proxy("GET")
         else:
@@ -273,6 +275,55 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "today_rate":    round(tickets(today_hr, today_diff, 86400)) if today_hr else 0,
             "today_hr":      round(today_hr, 1) if today_hr else None,
             "today_diff":    int(today_diff) if today_diff else 8192,
+        })
+
+    def _get_energy(self):
+        qs        = parse_qs(urlparse(self.path).query)
+        miner_idx = int(qs.get("miner", ["0"])[0])
+        cfg       = load_config()
+        if miner_idx >= len(cfg["miners"]):
+            return self._respond(404, {"error": "miner not found"})
+        miner_ip = cfg["miners"][miner_idx]["ip"]
+        conn     = sqlite3.connect(DB_PATH)
+        cur      = conn.cursor()
+
+        # daily energy for past 7 days — each reading represents POLL_INTERVAL seconds
+        cur.execute("""
+            SELECT date(ts, 'unixepoch', 'localtime') AS day,
+                   SUM(power) AS p_sum, AVG(power) AS p_avg
+            FROM readings
+            WHERE miner_ip = ? AND ts > ?
+            GROUP BY day
+            ORDER BY day
+        """, (miner_ip, int(time.time()) - 7 * 86400))
+        rows = cur.fetchall()
+
+        import datetime
+        midnight = int(datetime.datetime.combine(
+            datetime.date.today(), datetime.time.min).timestamp())
+        cur.execute("""
+            SELECT SUM(power), AVG(power)
+            FROM readings WHERE miner_ip = ? AND ts >= ?
+        """, (miner_ip, midnight))
+        today_row = cur.fetchone()
+        conn.close()
+
+        def kwh(p_sum):
+            # kWh = watts * seconds / 3,600,000 ; each reading covers POLL_INTERVAL s
+            return (p_sum * POLL_INTERVAL / 3_600_000) if p_sum else 0.0
+
+        days, counts = [], []
+        for day, p_sum, p_avg in rows:
+            days.append(day)
+            counts.append(round(kwh(p_sum), 3))
+
+        today_psum, today_pavg = today_row if today_row else (None, None)
+        self._respond(200, {
+            "days":      days,
+            "counts":    counts,
+            "today":     round(kwh(today_psum), 3),
+            "projected": round((today_pavg or 0) * 24 / 1000, 3),  # full-day kWh at today's avg draw
+            "avg_w":     round(today_pavg, 1) if today_pavg else None,
         })
 
     def _get_history(self):
