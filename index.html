@@ -125,6 +125,53 @@
       margin-top: 6px;
     }
 
+    /* ── Info tooltip (ⓘ on hover) ── */
+    .info {
+      display: inline-flex;
+      align-items: center; justify-content: center;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      border: 1px solid var(--muted);
+      color: var(--subtle);
+      font-size: 9px; font-weight: 700; font-style: normal;
+      line-height: 1; letter-spacing: 0;
+      cursor: help; position: relative; flex: none;
+      text-transform: none;
+      transition: border-color .15s, color .15s;
+    }
+    .info:hover { border-color: var(--accent); color: var(--accent); }
+    .info::after {
+      content: attr(data-tip);
+      position: absolute;
+      top: calc(100% + 9px); left: 50%;
+      transform: translateX(-50%);
+      width: max-content; max-width: 230px;
+      background: #161922;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 11px;
+      font-size: 11.5px; font-weight: 400; font-style: normal;
+      letter-spacing: 0; text-transform: none;
+      line-height: 1.5; text-align: left; white-space: normal;
+      opacity: 0; visibility: hidden;
+      transition: opacity .15s;
+      z-index: 100; pointer-events: none;
+      box-shadow: 0 8px 24px rgba(0,0,0,.55);
+    }
+    .info::before {
+      content: "";
+      position: absolute;
+      top: calc(100% + 4px); left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-bottom-color: var(--border);
+      opacity: 0; visibility: hidden;
+      transition: opacity .15s;
+      z-index: 100;
+    }
+    .info:hover::after, .info:hover::before { opacity: 1; visibility: visible; }
+
     /* accent variants */
     .card.accent-orange { border-color: rgba(247,147,26,.25); }
     .card.accent-orange .card-value { color: var(--accent); }
@@ -731,30 +778,30 @@
 <div class="lottery-card" style="margin-bottom:16px;">
   <div class="lottery-header">
     <span>🎰</span>
-    <span>Solo Mining Lottery</span>
-    <span class="lottery-jackpot" id="lot-jackpot">Jackpot: 3.125 BTC</span>
+    <span>Solo Mining Lottery <span class="info" data-tip="Solo mining means you mine alone. If your BitAxe finds a valid block, you keep the ENTIRE block reward (~3.125 BTC) instead of splitting it with a pool. The odds are tiny — hence 'lottery.'">i</span></span>
+    <span class="lottery-jackpot" id="lot-jackpot" title="The full reward you'd win if your miner solves a block: 3.125 BTC + fees, shown in USD at the current price.">Jackpot: 3.125 BTC</span>
   </div>
   <div class="lottery-grid">
     <div class="lottery-stat">
       <div class="lottery-val" id="lot-tickets-day">—</div>
-      <div class="lottery-lbl">Tickets / Day</div>
+      <div class="lottery-lbl">Tickets / Day <span class="info" data-tip="How many 'lottery tickets' your hashrate earns per day. Each share your miner submits is one independent chance at solving a block.">i</span></div>
     </div>
     <div class="lottery-stat">
       <div class="lottery-val" id="lot-tickets-needed">—</div>
-      <div class="lottery-lbl">Tickets to Win</div>
+      <div class="lottery-lbl">Tickets to Win <span class="info" data-tip="Roughly how many tickets it takes, on average, to win once — based on the current Bitcoin network difficulty.">i</span></div>
     </div>
     <div class="lottery-stat">
       <div class="lottery-val" id="lot-daily-odds">—</div>
-      <div class="lottery-lbl">Today's Odds</div>
+      <div class="lottery-lbl">Today's Odds <span class="info" data-tip="Your chance of solving a block today (1 in N), given your hashrate versus the entire Bitcoin network.">i</span></div>
     </div>
     <div class="lottery-stat">
       <div class="lottery-val" id="lot-expected">—</div>
-      <div class="lottery-lbl">Expected Wait</div>
+      <div class="lottery-lbl">Expected Wait <span class="info" data-tip="On average how long you'd mine before winning a block at this hashrate. It's a statistical average — you could hit tomorrow or never.">i</span></div>
     </div>
   </div>
   <div class="lottery-progress-wrap">
     <div class="lottery-progress-label">
-      <span>Best difficulty vs. block target</span>
+      <span>Best difficulty vs. block target <span class="info" data-tip="Your luckiest share's difficulty compared to what's needed to actually win a block. The bar shows how close you've come (log scale — a real win needs the far-right edge).">i</span></span>
       <span id="lot-best-pct">—</span>
     </div>
     <div class="lottery-track">
@@ -773,7 +820,7 @@
   <!-- Hashrate -->
   <div class="card accent-orange" id="card-hashrate">
     <div class="card-label">
-      <span class="icon">⚡</span> Hashrate
+      <span class="icon">⚡</span> Hashrate <span class="info" data-tip="Your miner's raw speed — hashes computed per second. More hashrate = more lottery tickets. TH/s = trillions of hashes per second.">i</span>
     </div>
     <div>
       <span class="card-value" id="hashrate">—</span>
@@ -788,7 +835,7 @@
   <!-- Temperature -->
   <div class="card" id="card-temp">
     <div class="card-label">
-      <span class="icon">🌡️</span> Temperature
+      <span class="icon">🌡️</span> Temperature <span class="info" data-tip="The mining chip (ASIC) temperature. Turns red at 66°C — sustained heat shortens the chip's lifespan.">i</span>
     </div>
     <div>
       <span class="card-value" id="temp">—</span>
@@ -803,7 +850,7 @@
   <!-- Power -->
   <div class="card accent-blue" id="card-power">
     <div class="card-label">
-      <span class="icon">🔌</span> Power
+      <span class="icon">🔌</span> Power <span class="info" data-tip="Watts drawn from the wall. The sub-line shows efficiency (GH/W) — hashrate per watt; higher is better.">i</span>
     </div>
     <div>
       <span class="card-value" id="power">—</span>
@@ -818,7 +865,7 @@
   <!-- Uptime -->
   <div class="card accent-purple">
     <div class="card-label">
-      <span class="icon">⏱️</span> Uptime
+      <span class="icon">⏱️</span> Uptime <span class="info" data-tip="How long the miner has run since its last restart. The dots represent days.">i</span>
     </div>
     <div>
       <span class="card-value" id="uptime" style="font-size:26px">—</span>
@@ -830,7 +877,7 @@
   <!-- Shares (wide) -->
   <div class="card wide">
     <div class="card-label">
-      <span class="icon">🎯</span> Shares
+      <span class="icon">🎯</span> Shares <span class="info" data-tip="Valid proofs-of-work submitted to the pool. Accepted = counted toward your stats; Rejected = arrived late or invalid (a few is normal).">i</span>
     </div>
     <div class="shares-row">
       <div class="share-box accepted">
@@ -849,7 +896,7 @@
   <!-- Best Difficulty (wide) -->
   <div class="card wide accent-orange">
     <div class="card-label">
-      <span class="icon">🏆</span> Best Difficulty
+      <span class="icon">🏆</span> Best Difficulty <span class="info" data-tip="The highest-difficulty share your miner has ever found. The closer this gets to the network's block difficulty, the closer you came to winning.">i</span>
     </div>
     <div>
       <span class="card-value" id="best-diff" style="font-size:28px">—</span>
@@ -862,17 +909,17 @@
 <!-- Second row: stratum + extra info -->
 <div class="info-row" style="margin-top:16px;">
   <div class="info-card">
-    <div class="card-label"><span class="icon">🌐</span> Stratum URL</div>
+    <div class="card-label"><span class="icon">🌐</span> Stratum URL <span class="info" data-tip="The mining pool server your miner connects to (Stratum is the mining protocol). The sub-line is your payout address / worker name.">i</span></div>
     <div class="info-value" id="stratum-url">—</div>
     <div class="card-sub" id="stratum-user">&nbsp;</div>
   </div>
   <div class="info-card">
-    <div class="card-label"><span class="icon">ℹ️</span> Device Info</div>
+    <div class="card-label"><span class="icon">ℹ️</span> Device Info <span class="info" data-tip="Your miner's model, ASIC chip, board revision, firmware version, fan speed, and WiFi signal strength.">i</span></div>
     <div class="info-value" id="device-info">—</div>
     <div class="card-sub" id="device-sub">&nbsp;</div>
   </div>
   <div class="info-card">
-    <div class="card-label"><span class="icon">🖥️</span> Pi CPU Temp</div>
+    <div class="card-label"><span class="icon">🖥️</span> Pi CPU Temp <span class="info" data-tip="Temperature of the Raspberry Pi running this dashboard — not the miner. Green below 65°C.">i</span></div>
     <div class="info-value" id="pi-temp">—</div>
     <div class="card-sub" id="pi-temp-sub">&nbsp;</div>
   </div>
@@ -885,17 +932,17 @@
     <div class="tickets-live">
       <div class="tickets-icon">🎟️</div>
       <div class="tickets-count" id="tickets-today">—</div>
-      <div class="tickets-label">Tickets Today</div>
+      <div class="tickets-label">Tickets Today <span class="info" data-tip="Live count of lottery tickets earned since midnight, ticking up in real time as your miner submits shares.">i</span></div>
       <div class="tickets-rate" id="tickets-rate">&nbsp;</div>
     </div>
     <div class="tickets-chart-wrap">
-      <div class="tickets-chart-label">Tickets per Day — Last 7 Days</div>
+      <div class="tickets-chart-label">Tickets per Day — Last 7 Days <span class="info" data-tip="Your daily ticket totals over the past week — a quick view of how consistently the miner has been running.">i</span></div>
       <div class="tickets-bar-area"><canvas id="chart-tickets"></canvas></div>
     </div>
   </div>
 
   <div class="history-header">
-    <div class="history-title">📈 History</div>
+    <div class="history-title">📈 History <span class="info" data-tip="Charts of your miner's stats over time. Use the tabs on the right to pick a range (1H to 7 days).">i</span></div>
     <div class="time-tabs">
       <button class="time-tab" data-hours="1"  onclick="setTimeRange(1,  this)">1H</button>
       <button class="time-tab" data-hours="6"  onclick="setTimeRange(6,  this)">6H</button>
@@ -905,19 +952,19 @@
   </div>
   <div class="charts-grid">
     <div class="chart-card">
-      <div class="chart-label">⚡ Hashrate (GH/s)</div>
+      <div class="chart-label">⚡ Hashrate (GH/s) <span class="info" data-tip="Mining speed over time. A flat line is healthy; dips mean the miner slowed or briefly disconnected.">i</span></div>
       <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
     </div>
     <div class="chart-card">
-      <div class="chart-label">🌡️ Temperature (°C)</div>
+      <div class="chart-label">🌡️ Temperature (°C) <span class="info" data-tip="Chip temperature over time — watch for steady upward creep, which can signal dust buildup or poor airflow.">i</span></div>
       <div class="chart-wrap"><canvas id="chart-temp"></canvas></div>
     </div>
     <div class="chart-card">
-      <div class="chart-label">🔌 Power (W) &amp; Efficiency (GH/W)</div>
+      <div class="chart-label">🔌 Power (W) &amp; Efficiency (GH/W) <span class="info" data-tip="Watts drawn (blue) and efficiency in GH/W (teal) over time. Efficiency drops as the chip heats up.">i</span></div>
       <div class="chart-wrap"><canvas id="chart-power"></canvas></div>
     </div>
     <div class="chart-card">
-      <div class="chart-label">🎯 Shares per Interval</div>
+      <div class="chart-label">🎯 Shares per Interval <span class="info" data-tip="Accepted (green) and rejected (red) shares in each time bucket. Mostly green is what you want.">i</span></div>
       <div class="chart-wrap"><canvas id="chart-shares"></canvas></div>
     </div>
   </div>
