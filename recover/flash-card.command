@@ -109,8 +109,17 @@ touch "$B/ssh"
 unset WIFI_PW
 dot_clean "$B" 2>/dev/null; rm -f "$B/._"* 2>/dev/null || true
 
-sync; diskutil eject "/dev/$DISK"
+# Verify the files actually landed on the drive
+if [ ! -f "$B/network-config" ] || [ ! -f "$B/user-data" ]; then
+  echo "✗ Cloud-init files were NOT written — the boot partition may not have mounted."
+  echo "  Check that /Volumes/bootfs is visible in Finder, then re-run the script."
+  read -p "Press Enter to close."; exit 1
+fi
+echo "✓ Cloud-init config written and verified."
+
+sync
+diskutil eject "/dev/$DISK" 2>/dev/null || diskutil unmountDisk "/dev/$DISK" 2>/dev/null || true
 echo
-echo "✓ DONE. Put the card in the Pi, power on, wait ~4 min for it to join WiFi."
+echo "✓ DONE. Put the SSD/card in the Pi, power on, wait ~4 min for it to join WiFi."
 echo "  Then double-click  rebuild-stack.command  to restore everything."
 read -p "Press Enter to close."
