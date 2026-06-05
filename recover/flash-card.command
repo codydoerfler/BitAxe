@@ -27,14 +27,13 @@ diskutil list external physical
 echo
 read -p "Enter the disk identifier of the SD card / USB SSD (e.g. disk8) — LOOK CAREFULLY, this ERASES it: " DISK
 [ -z "$DISK" ] && { echo "No disk entered. Aborting."; exit 1; }
-# sanity: must be an EXTERNAL, EJECTABLE disk (accepts SD cards AND USB SSDs,
-# which report as "fixed" media — but still refuses the Mac's internal drive).
+# sanity: must be a USB or SD (external) disk — refuses the Mac's internal NVMe/SATA.
+# USB SSDs report Protocol:USB and Removable Media:Fixed (not "Ejectable:Yes"),
+# so we check Protocol instead of Ejectable.
 DINFO=$(diskutil info "$DISK" 2>/dev/null)
-if ! echo "$DINFO" | grep -qE "Internal:[[:space:]]*No"; then
-  echo "✗ $DISK is not an external disk (won't touch an internal drive). Aborting for safety."; exit 1
-fi
-if ! echo "$DINFO" | grep -qE "Ejectable:[[:space:]]*Yes"; then
-  echo "✗ $DISK is not ejectable. Aborting for safety."; exit 1
+PROTO=$(echo "$DINFO" | awk -F: '/Protocol/{gsub(/ /,"",$2); print $2}')
+if [[ "$PROTO" != "USB" && "$PROTO" != "SD" ]]; then
+  echo "✗ $DISK does not appear to be a USB or SD drive (Protocol: $PROTO). Aborting for safety."; exit 1
 fi
 SIZE=$(echo "$DINFO" | grep "Disk Size" | head -1)
 echo "→ Target: /dev/$DISK  ($SIZE)"
