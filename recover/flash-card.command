@@ -68,6 +68,7 @@ cat > "$B/user-data" <<EOF
 #cloud-config
 hostname: raspberrypi
 manage_etc_hosts: true
+timezone: America/Denver
 users:
   - name: codydoerfler
     groups: users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo
