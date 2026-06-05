@@ -1,8 +1,10 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
 # flash-card.command — Step 1 of Pi recovery
-# Flashes Raspberry Pi OS to the SD card and writes the cloud-init headless
-# config (the format THIS image actually wants — discovered the hard way).
+# Flashes Raspberry Pi OS to an SD card OR a USB SSD and writes the cloud-init
+# headless config (the format THIS image actually wants — discovered the hard way).
+# A USB SSD is the more durable choice; the Pi 5 boots it from a blue USB-3 port
+# when no SD card is inserted.
 # Double-click to run. You'll be asked for your Mac password (for the flash)
 # and your WiFi password (typed locally, never stored).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,20 +18,25 @@ IMG_CACHE="$HOME/bitaxe-pi-backup/raspios.img.xz"
 HOMEBREW_XZ="/opt/homebrew/bin/xz"
 
 echo "════════════════════════════════════════════════════════"
-echo "  BitAxe Pi — Flash & Provision SD card"
+echo "  BitAxe Pi — Flash & Provision (SD card or USB SSD)"
 echo "════════════════════════════════════════════════════════"
 
-# 1. Identify the SD card (external, physical, removable)
-echo; echo "→ Looking for the SD card..."
+# 1. Identify the target drive — SD card OR USB SSD (external, physical)
+echo; echo "→ Looking for external drives (SD cards and USB SSDs)..."
 diskutil list external physical
 echo
-read -p "Enter the SD card disk identifier (e.g. disk8) — LOOK CAREFULLY, this ERASES it: " DISK
+read -p "Enter the disk identifier of the SD card / USB SSD (e.g. disk8) — LOOK CAREFULLY, this ERASES it: " DISK
 [ -z "$DISK" ] && { echo "No disk entered. Aborting."; exit 1; }
-# sanity: must be external + removable
-if ! diskutil info "$DISK" 2>/dev/null | grep -q "Removable Media:.*Removable"; then
-  echo "✗ $DISK is not a removable disk. Aborting for safety."; exit 1
+# sanity: must be an EXTERNAL, EJECTABLE disk (accepts SD cards AND USB SSDs,
+# which report as "fixed" media — but still refuses the Mac's internal drive).
+DINFO=$(diskutil info "$DISK" 2>/dev/null)
+if ! echo "$DINFO" | grep -qE "Internal:[[:space:]]*No"; then
+  echo "✗ $DISK is not an external disk (won't touch an internal drive). Aborting for safety."; exit 1
 fi
-SIZE=$(diskutil info "$DISK" | grep "Disk Size" | head -1)
+if ! echo "$DINFO" | grep -qE "Ejectable:[[:space:]]*Yes"; then
+  echo "✗ $DISK is not ejectable. Aborting for safety."; exit 1
+fi
+SIZE=$(echo "$DINFO" | grep "Disk Size" | head -1)
 echo "→ Target: /dev/$DISK  ($SIZE)"
 read -p "Type ERASE to confirm wiping /dev/$DISK: " CONFIRM
 [ "$CONFIRM" = "ERASE" ] || { echo "Not confirmed. Aborting."; exit 1; }

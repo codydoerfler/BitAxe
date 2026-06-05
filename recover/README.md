@@ -1,22 +1,47 @@
 # BitAxe Pi — Recovery Toolkit
 
-The Pi's SD card corrupts on abrupt power loss. This turns recovery from an
-hours-long ordeal into **two double-clicks**.
+The Pi corrupts its boot drive on abrupt power loss. This turns recovery from an
+hours-long ordeal into **two double-clicks** — or one click in the app.
 
-## The 2-step recovery
+## Easiest: the app
 
-1. **Put the SD card in your Mac**, then double-click **`flash-card.command`**
-   - Pick the SD card disk, type `ERASE` to confirm
+Double-click **`BitAxe Recovery.app`** for a menu of everything:
+
+1. **Flash a card or SSD** — write Pi OS + config to a blank SD card or USB SSD
+2. **Rebuild the stack** — reinstall everything on the Pi + restore credentials
+3. **Refresh credential backup** — re-save tunnel / Tailscale / printer config
+4. **Safe shutdown the Pi** — graceful, UPS-friendly remote power-down
+
+> First launch only: macOS asks permission for the app to control Terminal — click **OK**.
+
+## The 2-step recovery (what options 1 + 2 do)
+
+1. **Plug the target drive into your Mac** (SD card *or* USB SSD), then run
+   **Flash a card or SSD** (`flash-card.command`)
+   - Pick the disk, type `ERASE` to confirm
    - Enter your Mac password (for the flash) and WiFi password (typed locally, never stored)
-   - ~3–4 min. Then put the card in the Pi and power on.
+   - ~3–4 min. Then put the drive in the Pi and power on.
 
-2. After the Pi boots and joins WiFi (~4 min), double-click **`rebuild-stack.command`**
+2. After the Pi boots and joins WiFi (~4 min), run **Rebuild the stack**
+   (`rebuild-stack.command`)
    - Finds the Pi (local or Tailscale), reinstalls the whole stack, and **restores
      saved credentials** so there's **no browser re-auth and no printer re-pairing**.
    - Verifies everything at the end.
 
 That's it. Local dashboard, public `bitaxe.rrwestminster.com`, Tailscale, and both
 OctoEverywhere printers all come back automatically.
+
+## Booting from a USB SSD (recommended — barely corrupts)
+
+An SSD survives power loss far better than an SD card. To migrate:
+
+1. Flash the **SSD** with option 1 (your current SD card is never touched — it stays
+   as an instant fallback).
+2. Shut down the Pi, **remove the SD card**, plug the SSD into a **blue USB-3 port**.
+3. Power on — the Pi 5 boots from USB automatically when no SD card is inserted.
+4. Run option 2 to rebuild + verify.
+5. **Undo, if ever needed:** power off, re-insert the SD card → you're back to the old
+   setup (the Pi prefers the SD card when one is present).
 
 ## What's where
 
