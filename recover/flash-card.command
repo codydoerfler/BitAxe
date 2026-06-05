@@ -40,6 +40,11 @@ echo "→ Target: /dev/$DISK  ($SIZE)"
 read -p "Type ERASE to confirm wiping /dev/$DISK: " CONFIRM
 [ "$CONFIRM" = "ERASE" ] || { echo "Not confirmed. Aborting."; exit 1; }
 
+# Collect WiFi password now — before the flash — so no buffered newlines swallow it
+echo
+read -s -p "Enter WiFi password for '$WIFI_SSID' (hidden, typed once before flash): " WIFI_PW; echo
+[ -z "$WIFI_PW" ] && { echo "✗ WiFi password cannot be empty. Aborting."; exit 1; }
+
 # 2. Get the OS image (cached or download latest)
 if [ ! -f "$IMG_CACHE" ]; then
   echo "→ Downloading Raspberry Pi OS Lite 64-bit (~550MB)..."
@@ -60,10 +65,6 @@ sleep 2
 diskutil mount "${DISK}s1" >/dev/null 2>&1 || diskutil mount "$(diskutil list "$DISK" | awk '/Windows_FAT_32/{print $NF}')" >/dev/null 2>&1
 B="/Volumes/bootfs"
 [ -d "$B" ] || { echo "✗ boot partition didn't mount. Check Finder for 'bootfs'."; exit 1; }
-
-# WiFi password — typed locally, never stored
-echo
-read -s -p "Enter WiFi password for '$WIFI_SSID' (hidden): " WIFI_PW; echo
 
 cat > "$B/meta-data" <<EOF
 instance-id: bitaxe-pi-$(date +%s)
