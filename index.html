@@ -740,9 +740,29 @@
     }
     .miner-name { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
     .miner-ip   { font-size: 12px; color: var(--subtle); }
-    .miner-status { margin-left: auto; font-size: 12px; font-weight: 600; }
+    .miner-status { font-size: 12px; font-weight: 600; margin-left: 12px; }
     .miner-status.on  { color: var(--green); }
     .miner-status.off { color: var(--red); }
+
+    /* Identify button (flashes "Hi!" on the miner's screen, like AxeOS) */
+    .identify-btn {
+      margin-left: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--subtle);
+      font-size: 12px; font-weight: 600;
+      padding: 4px 11px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .identify-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .identify-btn:disabled { opacity: .4; cursor: default; }
+    .identify-btn.flashing { border-color: var(--accent); color: var(--accent); background: var(--accent-lo); }
+
+    /* Combined / fleet summary block reuses .miner-block styling */
+    .combined-name { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; color: var(--accent); }
   </style>
 </head>
 <body>
@@ -1005,7 +1025,7 @@
   /* ── Render: per-miner cards + combined (shared) lottery ── */
   function renderMiners(miners) {
     const container = document.getElementById('miners-container');
-    let html = '', combinedHR = 0, onlineCount = 0, bestDiffMax = 0, ref = null;
+    let html = '', combinedHR = 0, combinedPower = 0, onlineCount = 0, bestDiffMax = 0, ref = null;
 
     miners.forEach(m => {
       const d = m.info || {};
@@ -1014,6 +1034,7 @@
       if (online) {
         cleanHR = getCleanHashrate(d) || 0;
         combinedHR += cleanHR; onlineCount++;
+        combinedPower += (d.power || 0);
         if (!ref) ref = d;
         if ((d.bestDiff || 0) > bestDiffMax) bestDiffMax = d.bestDiff;
         eff = (d.power && cleanHR) ? (cleanHR / d.power).toFixed(1) : null;
@@ -1021,7 +1042,7 @@
       const [hrVal, hrUnit] = fmtHashrate(online ? cleanHR : null);
       const tc = online ? tempClass(d.temp) : { cls:'', label:'—' };
       const acc = d.sharesAccepted || 0, rej = d.sharesRejected || 0, tot = acc + rej;
-      const coreV = (online && d.coreVoltageActual != null) ? ` · Core ${(d.coreVoltageActual/1000).toFixed(3)}V` : '';
+      const actV  = (online && d.coreVoltageActual != null) ? (d.coreVoltageActual/1000).toFixed(3) : '—';
       const hrBar = online ? pct(cleanHR, (d.expectedHashrate || 1500) * 1.2) : 0;
       const tBar  = online ? pct(d.temp || 0, 100) : 0;
       const pBar  = online ? pct(d.power || 0, d.maxPower || 40) : 0;
@@ -1031,55 +1052,120 @@
         <div class="miner-block-header">
           <span class="miner-name">⚡ ${m.name}</span>
           <span class="miner-ip">${m.ip.replace('http://','')}</span>
+          <button class="identify-btn" onclick="identify(${m.index}, this)" ${!online?'disabled':''} title="Flash 'Hi!' on this miner's screen so you can spot it physically">🔍 Identify</button>
           <span class="miner-status ${online?'on':'off'}">${online?'● Online':'● Offline'}</span>
         </div>
         <div class="grid">
           <div class="card accent-orange">
-            <div class="card-label"><span class="icon">⚡</span> Hashrate</div>
+            <div class="card-label"><span class="icon">⚡</span> Hashrate <span class="info" data-tip="This miner's current mining speed. The bar compares it to the chip's expected hashrate at its frequency.">i</span></div>
             <div><span class="card-value">${hrVal}</span> <span class="card-unit">${hrUnit}</span></div>
             <div class="gauge-wrap"><div class="gauge-track"><div class="gauge-fill orange" style="width:${hrBar}%"></div></div></div>
             <div class="card-sub">${online && d.frequency ? d.frequency + ' MHz' : '&nbsp;'}</div>
           </div>
           <div class="card accent-${tc.cls}">
-            <div class="card-label"><span class="icon">🌡️</span> Temperature</div>
+            <div class="card-label"><span class="icon">🌡️</span> Temperature <span class="info" data-tip="ASIC chip temperature. Normal below 55°C, warm 55–65°C, too hot at 66°C and above.">i</span></div>
             <div><span class="card-value">${online && d.temp!=null ? d.temp.toFixed(1) : '—'}</span> <span class="card-unit">°C</span></div>
             <div class="gauge-wrap"><div class="gauge-track"><div class="gauge-fill ${tc.cls}" style="width:${tBar}%"></div></div></div>
             <div class="card-sub">${tc.label}</div>
           </div>
           <div class="card accent-blue">
-            <div class="card-label"><span class="icon">🔌</span> Power</div>
+            <div class="card-label"><span class="icon">🔌</span> Power <span class="info" data-tip="Watts this miner draws at the wall. The bar shows current draw versus its maximum.">i</span></div>
             <div><span class="card-value">${online && d.power!=null ? d.power.toFixed(1) : '—'}</span> <span class="card-unit">W</span></div>
             <div class="gauge-wrap"><div class="gauge-track"><div class="gauge-fill blue" style="width:${pBar}%"></div></div></div>
-            <div class="card-sub">${eff ? eff + ' GH/W' + coreV : '&nbsp;'}</div>
+            <div class="card-sub">${eff ? eff + ' GH/W' : '&nbsp;'}</div>
           </div>
           <div class="card accent-purple">
-            <div class="card-label"><span class="icon">⏱️</span> Uptime</div>
+            <div class="card-label"><span class="icon">🔋</span> Core Voltage <span class="info" data-tip="The ASIC core voltage. The big number is measured live; 'Set' is your configured target. Higher voltage enables higher frequency but runs hotter.">i</span></div>
+            <div><span class="card-value">${actV}</span> <span class="card-unit">V</span></div>
+            <div class="card-sub">${online && d.coreVoltage != null ? 'Set ' + d.coreVoltage + ' mV' : '&nbsp;'}</div>
+          </div>
+          <div class="card">
+            <div class="card-label"><span class="icon">⏱️</span> Uptime <span class="info" data-tip="How long this miner has run since its last restart.">i</span></div>
             <div><span class="card-value" style="font-size:24px">${online ? fmtUptime(d.uptimeSeconds) : '—'}</span></div>
             <div class="card-sub">${online ? [d.ASICModel, d.version ? 'FW ' + d.version : ''].filter(Boolean).join(' · ') : '&nbsp;'}</div>
           </div>
+          <div class="card accent-orange">
+            <div class="card-label"><span class="icon">🏆</span> Best Difficulty <span class="info" data-tip="The hardest share this miner has ever found — your closest brush with solving a block. Measured against the network difficulty.">i</span></div>
+            <div><span class="card-value" style="font-size:26px">${online ? fmtDifficulty(d.bestDiff) : '—'}</span></div>
+            <div class="card-sub">${online && d.stratumURL ? '⛏ ' + d.stratumURL + (d.stratumPort ? ':' + d.stratumPort : '') : '&nbsp;'}</div>
+          </div>
           <div class="card wide">
-            <div class="card-label"><span class="icon">🎯</span> Shares</div>
+            <div class="card-label"><span class="icon">🎯</span> Shares <span class="info" data-tip="Accepted (valid) versus rejected (invalid) work this miner submitted to the pool. A high accept rate is healthy.">i</span></div>
             <div class="shares-row">
               <div class="share-box accepted"><div class="lbl">Accepted</div><div class="val">${acc.toLocaleString()}</div><div class="card-sub">${tot>0 ? ((acc/tot)*100).toFixed(2)+'% rate' : '&nbsp;'}</div></div>
               <div class="share-box rejected"><div class="lbl">Rejected</div><div class="val">${rej.toLocaleString()}</div><div class="card-sub">&nbsp;</div></div>
             </div>
           </div>
-          <div class="card wide accent-orange">
-            <div class="card-label"><span class="icon">🏆</span> Best Difficulty</div>
-            <div><span class="card-value" style="font-size:26px">${online ? fmtDifficulty(d.bestDiff) : '—'}</span></div>
-            <div class="card-sub">${online && d.stratumURL ? '⛏ ' + d.stratumURL + (d.stratumPort ? ':' + d.stratumPort : '') : '&nbsp;'}</div>
-          </div>
         </div>
       </div>`;
     });
 
-    container.innerHTML = html;
+    // ── Combined / fleet summary (only meaningful with >1 miner) ──
+    let combinedHtml = '';
+    if (miners.length > 1) {
+      const [cHr, cHrU] = fmtHashrate(combinedHR);
+      const cEff = (combinedPower && combinedHR) ? (combinedHR / combinedPower).toFixed(1) : '—';
+      combinedHtml = `
+      <div class="miner-block">
+        <div class="miner-block-header">
+          <span class="combined-name">Σ Combined</span>
+          <span class="miner-ip">all miners</span>
+          <span class="miner-status ${onlineCount ? 'on' : 'off'}" style="margin-left:auto;">${onlineCount} of ${miners.length} online</span>
+        </div>
+        <div class="grid">
+          <div class="card accent-orange">
+            <div class="card-label"><span class="icon">⚡</span> Combined Hashrate <span class="info" data-tip="Total hashrate of all online miners added together.">i</span></div>
+            <div><span class="card-value">${cHr}</span> <span class="card-unit">${cHrU}</span></div>
+            <div class="card-sub">across ${onlineCount} online miner${onlineCount!==1?'s':''}</div>
+          </div>
+          <div class="card accent-blue">
+            <div class="card-label"><span class="icon">🔌</span> Combined Power <span class="info" data-tip="Total wall power drawn by all online miners combined.">i</span></div>
+            <div><span class="card-value">${combinedPower.toFixed(1)}</span> <span class="card-unit">W</span></div>
+            <div class="card-sub">total draw</div>
+          </div>
+          <div class="card accent-green">
+            <div class="card-label"><span class="icon">♻️</span> Efficiency <span class="info" data-tip="Combined hashrate per watt across all miners. Higher is more efficient.">i</span></div>
+            <div><span class="card-value">${cEff}</span> <span class="card-unit">GH/W</span></div>
+            <div class="card-sub">fleet average</div>
+          </div>
+          <div class="card accent-purple">
+            <div class="card-label"><span class="icon">🛰️</span> Miners Online <span class="info" data-tip="How many of your configured miners are currently responding.">i</span></div>
+            <div><span class="card-value">${onlineCount}</span> <span class="card-unit">/ ${miners.length}</span></div>
+            <div class="card-sub">${onlineCount === miners.length ? 'all reporting' : (miners.length - onlineCount) + ' offline'}</div>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    container.innerHTML = combinedHtml + html;
 
     const [tHr, tHrU] = fmtHashrate(combinedHR);
     const hn = document.getElementById('hostname');
     if (hn) hn.textContent = `${onlineCount} miner${onlineCount!==1?'s':''} online · ${tHr} ${tHrU} combined`;
 
     return { combinedHR, ref, bestDiffMax };
+  }
+
+  /* ── Identify: flash "Hi!" on the miner's screen (AxeOS console behavior) ── */
+  async function identify(idx, btn) {
+    if (!btn) return;
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.classList.add('flashing');
+    btn.innerHTML = '🔍 Identifying…';
+    try {
+      const res = await fetch(`/api/miner/${idx}/api/system/identify`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      btn.innerHTML = '✓ Check the screen';
+    } catch (e) {
+      btn.innerHTML = '✕ Failed';
+    } finally {
+      setTimeout(() => {
+        btn.classList.remove('flashing');
+        btn.innerHTML = orig;
+        btn.disabled = false;
+      }, 3000);
+    }
   }
 
   function renderLottery(combinedHR, ref, bestDiffMax) {
