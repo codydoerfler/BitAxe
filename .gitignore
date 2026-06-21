@@ -3,4 +3,6 @@
 __pycache__/
 history.db
 config.json
+bitaxe-dashboard.log
+backup-history.log
 .DS_Store

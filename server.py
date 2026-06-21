@@ -172,6 +172,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._btc_price()
         elif p == "/api/pi-temp":
             self._pi_temp()
+        elif p == "/api/host-load":
+            self._host_load()
         elif p == "/api/miners":
             self._get_miners()
         elif p == "/api/history":
@@ -415,6 +417,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raw = int(f.read().strip())
             temp = round(raw / 1000.0, 1)
             self._respond(200, {"temp": temp})
+        except Exception as e:
+            self._respond(503, {"error": str(e)})
+
+    def _host_load(self):
+        # Host-health metric for the Mac mini. A real CPU temperature on Apple
+        # Silicon needs root/IOKit, so we report CPU load (1-min average as a
+        # percent of cores) instead — reliable, no sudo, stdlib only.
+        try:
+            load1, load5, load15 = os.getloadavg()
+            cores = os.cpu_count() or 1
+            self._respond(200, {
+                "load1":  round(load1, 2),
+                "load5":  round(load5, 2),
+                "load15": round(load15, 2),
+                "cores":  cores,
+                "pct":    round(load1 / cores * 100),
+            })
         except Exception as e:
             self._respond(503, {"error": str(e)})
 

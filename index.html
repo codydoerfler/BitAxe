@@ -854,7 +854,7 @@
 <!-- Shared: Pi CPU temp -->
 <div class="info-row" style="margin-top:16px;">
   <div class="info-card">
-    <div class="card-label"><span class="icon">🖥️</span> Pi CPU Temp <span class="info" data-tip="Temperature of the Raspberry Pi running this dashboard — not the miner. Green below 65°C.">i</span></div>
+    <div class="card-label"><span class="icon">🖥️</span> Mac mini Load <span class="info" data-tip="CPU load on the Mac mini running this dashboard — not the miner. 1-minute average as a percent of all cores. Green below 70%.">i</span></div>
     <div class="info-value" id="pi-temp">—</div>
     <div class="card-sub" id="pi-temp-sub">&nbsp;</div>
   </div>
@@ -1278,23 +1278,24 @@
 
   async function fetchPiTemp() {
     try {
-      const res  = await fetch('/api/pi-temp');
+      const res  = await fetch('/api/host-load');
       const data = await res.json();
-      const t    = data.temp;
-      if (t == null) return;
+      const pct  = data.pct;
+      if (pct == null) return;
       const el  = document.getElementById('pi-temp');
       const sub = document.getElementById('pi-temp-sub');
-      el.textContent = `${t} °C`;
-      if (t >= 75) {
+      el.textContent = `${pct}%`;
+      if (pct >= 90) {
         el.style.color = 'var(--red)';
-        sub.textContent = 'Hot — check ventilation';
-      } else if (t >= 65) {
+        sub.textContent = 'Heavy load';
+      } else if (pct >= 70) {
         el.style.color = 'var(--accent)';
-        sub.textContent = 'Warm';
+        sub.textContent = 'Busy';
       } else {
         el.style.color = 'var(--green)';
         sub.textContent = 'Normal';
       }
+      sub.textContent += ` · load ${data.load1} (${data.cores} cores)`;
     } catch (_) {}
   }
 
