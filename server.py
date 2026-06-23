@@ -400,8 +400,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _remove_miner(self, idx):
         cfg = load_config()
-        if idx <= 0 or idx >= len(cfg["miners"]):
-            return self._respond(400, {"error": "cannot remove primary miner"})
+        if idx < 0 or idx >= len(cfg["miners"]):
+            return self._respond(400, {"error": "no such miner"})
+        if len(cfg["miners"]) <= 1:
+            return self._respond(400, {"error": "cannot remove the last miner"})
         cfg["miners"].pop(idx)
         save_config(cfg)
         self._respond(200, cfg)
