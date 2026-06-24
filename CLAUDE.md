@@ -3,9 +3,10 @@
 Web dashboard for monitoring BitAxe miners (and Pi temp, BTC price, history charts).
 Runs on a Raspberry Pi 5 and is viewed locally, over Tailscale, or publicly via Cloudflare.
 
-> One of three separate projects. The others — **Pi Forge** (Mac recovery app,
-> `~/Documents/Xcode/PiForge`) and the **BitAxe Widget** (`~/Documents/Xcode/Bitaxe Wiget`)
-> — are their own repos. Keep changes here scoped to the dashboard.
+> One of several separate projects (see `~/dev/PROJECTS.md` for the full map). Related:
+> **Pi Forge** (Mac recovery app, `~/dev/PiForge`) and the **BitAxe apps** "Prospector"
+> (`~/dev/BitAxeApp`, which now includes the widgets — the old standalone widget repo is
+> archived). Keep changes here scoped to the dashboard.
 
 ## What's here
 - `server.py` — Python `http.server` on **port 3000**. Serves `index.html` and proxies
