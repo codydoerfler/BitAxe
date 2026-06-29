@@ -8,9 +8,15 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import threading
 import time
 from urllib.parse import urlparse, parse_qs
+
+try:
+    import push                      # APNs push (offline / hot / fault alerts)
+except Exception:                    # never let push problems break the dashboard
+    push = None
 
 PORT    = 3000
 DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -141,19 +147,53 @@ def query_history(miner_ip, hours):
     return result
 
 
+# ── Host health ────────────────────────────────────────────────────────────────
+
+def _macos_mem_pct():
+    """Used physical memory as a percent (app memory + wired), best-effort via
+    vm_stat. Returns None on non-macOS or any parse failure."""
+    try:
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=3).stdout
+        page = 4096
+        m = re.search(r"page size of (\d+) bytes", out)
+        if m:
+            page = int(m.group(1))
+        stats = {}
+        for line in out.splitlines():
+            mm = re.match(r'"?([\w ]+?)"?:\s+(\d+)\.', line)
+            if mm:
+                stats[mm.group(1).strip()] = int(mm.group(2))
+        free = stats.get("Pages free", 0) + stats.get("Pages inactive", 0) + stats.get("Pages speculative", 0)
+        total = sum(stats.get(k, 0) for k in (
+            "Pages free", "Pages active", "Pages inactive", "Pages speculative", "Pages wired down"))
+        if total <= 0:
+            return None
+        return round((total - free) / total * 100)
+    except Exception:
+        return None
+
+
 # ── Background collector ───────────────────────────────────────────────────────
 
-def collector_loop():
+def collector_loop(monitor=None):
     while True:
         cfg = load_config()
+        snapshot = []
         for miner in cfg["miners"]:
+            info = None
             try:
                 url = miner["ip"] + "/api/system/info"
                 with urllib.request.urlopen(url, timeout=8) as r:
-                    data = json.load(r)
-                record_reading(miner["ip"], data)
+                    info = json.load(r)
+                record_reading(miner["ip"], info)
             except Exception:
-                pass
+                info = None
+            snapshot.append({"name": miner["name"], "online": info is not None, "info": info})
+        if monitor is not None:
+            try:
+                monitor.check(snapshot)
+            except Exception as e:
+                print(f"push monitor error: {e}")
         time.sleep(POLL_INTERVAL)
 
 
@@ -172,6 +212,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._btc_price()
         elif p == "/api/pi-temp":
             self._pi_temp()
+        elif p == "/api/host-load":
+            self._host_load()
         elif p == "/api/miners":
             self._get_miners()
         elif p == "/api/history":
@@ -195,6 +237,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         p = self.path.split("?")[0]
         if p == "/api/miners":
             self._add_miner()
+        elif p == "/api/register-push":
+            self._register_push()
         elif re.match(r"^/api/miner/\d+/", self.path):
             self._miner_proxy("POST")
         else:
@@ -418,6 +462,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._respond(503, {"error": str(e)})
 
+    def _host_load(self):
+        """Dashboard host health — CPU load as a percent of cores (works on the
+        Mac mini, where a real CPU temp needs root) plus memory pressure. The app
+        reads pct/load1/cores; mem_pct enriches the card when present."""
+        try:
+            load1, load5, _ = os.getloadavg()
+            cores = os.cpu_count() or 1
+            data = {
+                "pct":   round(load1 / cores * 100),
+                "load1": round(load1, 2),
+                "load5": round(load5, 2),
+                "cores": cores,
+            }
+            mem = _macos_mem_pct()
+            if mem is not None:
+                data["mem_pct"] = mem
+            self._respond(200, data)
+        except Exception as e:
+            self._respond(503, {"error": str(e)})
+
+    def _register_push(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            data = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            return self._respond(400, {"error": "bad json"})
+        token = (data.get("token") or "").strip()
+        if not token:
+            return self._respond(400, {"error": "missing token"})
+        if push is not None:
+            try:
+                push.register_token(token, data.get("name"))
+            except Exception as e:
+                return self._respond(500, {"error": str(e)})
+        self._respond(200, {"ok": True})
+
     # ── Low-level ─────────────────────────────────────────────────────────────
 
     def _proxy(self, url, method="GET", body=None, req=None):
@@ -451,9 +531,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     load_config()
     init_db()
-    t = threading.Thread(target=collector_loop, daemon=True)
+    monitor = push.PushMonitor() if push is not None else None
+    t = threading.Thread(target=collector_loop, args=(monitor,), daemon=True)
     t.start()
     print(f"BitAxe dashboard → http://localhost:{PORT}")
     with http.server.HTTPServer(("", PORT), Handler) as srv:
