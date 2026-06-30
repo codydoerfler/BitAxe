@@ -18,12 +18,23 @@ try:
 except Exception:                    # never let push problems break the dashboard
     push = None
 
+try:
+    import recover                   # auto-recovery: safe-reset + restart on overheat
+except Exception:                    # never let recovery problems break the dashboard
+    recover = None
+
 PORT    = 3000
 DIR     = os.path.dirname(os.path.abspath(__file__))
 CFG     = os.path.join(DIR, "config.json")
 DB_PATH = os.path.join(DIR, "history.db")
 
 POLL_INTERVAL = 60  # seconds between readings
+
+# ESP-Miner firmware releases (for the dashboard's update UI + version check).
+GH_LATEST   = "https://api.github.com/repos/bitaxeorg/ESP-Miner/releases/latest"
+GH_UA       = "BitAxeDashboard/1.0"
+OTA_TIMEOUT = 120   # seconds — a firmware image is ~1.5 MB over the LAN
+_fw_cache   = {"ts": 0.0, "data": None}   # latest-release lookup, cached 10 min
 
 # Time-of-use electricity rates ($/kWh). On-peak = non-holiday weekdays 5–9 PM.
 # (Off-peak ≈ on-peak ÷ 2.7. Summer = Jun–Sep, winter = rest.)
@@ -173,9 +184,52 @@ def _macos_mem_pct():
         return None
 
 
+# ── Firmware (ESP-Miner releases) ───────────────────────────────────────────────
+
+def fetch_latest_firmware():
+    """Latest ESP-Miner release: version + asset download URLs. Cached 10 min;
+    serves the stale entry if GitHub is briefly unreachable."""
+    now = time.time()
+    if _fw_cache["data"] and now - _fw_cache["ts"] < 600:
+        return _fw_cache["data"]
+    try:
+        req = urllib.request.Request(
+            GH_LATEST, headers={"User-Agent": GH_UA, "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            rel = json.load(r)
+    except Exception:
+        return _fw_cache["data"]
+    assets = {a.get("name"): a.get("browser_download_url") for a in rel.get("assets", [])}
+    data = {
+        "version":       rel.get("tag_name"),
+        "name":          rel.get("name"),
+        "published":     rel.get("published_at"),
+        "url":           rel.get("html_url"),
+        "esp_miner_url": assets.get("esp-miner.bin"),
+        "www_url":       assets.get("www.bin"),
+    }
+    _fw_cache.update(ts=now, data=data)
+    return data
+
+
+def _download_asset(url, timeout=60):
+    req = urllib.request.Request(url, headers={"User-Agent": GH_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _flash(ip, path, blob):
+    """POST a firmware image to one AxeOS OTA endpoint as raw octet-stream."""
+    req = urllib.request.Request(
+        ip + path, data=blob, method="POST",
+        headers={"Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=OTA_TIMEOUT) as r:
+        return 200 <= r.status < 300
+
+
 # ── Background collector ───────────────────────────────────────────────────────
 
-def collector_loop(monitor=None):
+def collector_loop(monitor=None, recoverer=None):
     while True:
         cfg = load_config()
         snapshot = []
@@ -188,12 +242,19 @@ def collector_loop(monitor=None):
                 record_reading(miner["ip"], info)
             except Exception:
                 info = None
-            snapshot.append({"name": miner["name"], "online": info is not None, "info": info})
+            snapshot.append({"name": miner["name"], "ip": miner["ip"],
+                             "online": info is not None, "info": info})
         if monitor is not None:
             try:
                 monitor.check(snapshot)
             except Exception as e:
                 print(f"push monitor error: {e}")
+        # Auto-recover overheating miners (opt-out via "auto_recover": false).
+        if recoverer is not None and cfg.get("auto_recover", True):
+            try:
+                recoverer.check(snapshot)
+            except Exception as e:
+                print(f"auto-recover error: {e}")
         time.sleep(POLL_INTERVAL)
 
 
@@ -222,6 +283,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._get_tickets()
         elif p == "/api/energy":
             self._get_energy()
+        elif p == "/api/firmware/latest":
+            self._firmware_latest()
         elif re.match(r"^/api/miner/\d+/", self.path):
             self._miner_proxy("GET")
         else:
@@ -239,6 +302,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._add_miner()
         elif p == "/api/register-push":
             self._register_push()
+        elif re.match(r"^/api/miner/(\d+)/update-firmware$", p):
+            self._update_firmware(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
+        elif re.match(r"^/api/miner/(\d+)/safe-reset$", p):
+            self._safe_reset(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
         elif re.match(r"^/api/miner/\d+/", self.path):
             self._miner_proxy("POST")
         else:
@@ -498,6 +565,67 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._respond(500, {"error": str(e)})
         self._respond(200, {"ok": True})
 
+    # ── Firmware + recovery ────────────────────────────────────────────────────
+
+    def _firmware_latest(self):
+        info = fetch_latest_firmware()
+        if not info:
+            return self._respond(502, {"error": "could not reach GitHub releases"})
+        self._respond(200, info)
+
+    def _miner_ip_info(self, idx):
+        """(ip, info|{}) for a configured miner, or (None, None) if out of range."""
+        cfg = load_config()
+        if idx >= len(cfg["miners"]):
+            return None, None
+        ip = cfg["miners"][idx]["ip"]
+        try:
+            with urllib.request.urlopen(ip + "/api/system/info", timeout=6) as r:
+                return ip, json.load(r)
+        except Exception:
+            return ip, {}
+
+    def _safe_reset(self, idx):
+        """Reset one miner to conservative tuning + auto fan, then restart."""
+        ip, info = self._miner_ip_info(idx)
+        if ip is None:
+            return self._respond(404, {"error": "miner not found"})
+        if recover is None:
+            return self._respond(503, {"error": "recovery module unavailable"})
+        params = recover.apply_safe_reset(ip, info)
+        if params:
+            self._respond(200, {"ok": True, "applied": params})
+        else:
+            self._respond(502, {"error": "reset failed"})
+
+    def _update_firmware(self, idx):
+        """Server-side OTA: download the latest ESP-Miner image(s) and flash the
+        miner. Body: {"which": "both"|"firmware"|"www"} (default both)."""
+        ip, _ = self._miner_ip_info(idx)
+        if ip is None:
+            return self._respond(404, {"error": "miner not found"})
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            body = {}
+        which = body.get("which", "both")
+        fw = fetch_latest_firmware()
+        if not fw:
+            return self._respond(502, {"error": "could not fetch latest firmware"})
+        results = {}
+        try:
+            if which in ("both", "firmware") and fw.get("esp_miner_url"):
+                results["firmware"] = _flash(ip, "/api/system/OTA",
+                                             _download_asset(fw["esp_miner_url"]))
+            if which in ("both", "www") and fw.get("www_url"):
+                results["www"] = _flash(ip, "/api/system/OTAWWW",
+                                        _download_asset(fw["www_url"]))
+        except Exception as e:
+            return self._respond(502, {"error": str(e), "partial": results})
+        self._respond(200, {"ok": bool(results) and all(results.values()),
+                            "version": fw.get("version"), "results": results})
+
     # ── Low-level ─────────────────────────────────────────────────────────────
 
     def _proxy(self, url, method="GET", body=None, req=None):
@@ -536,7 +664,17 @@ if __name__ == "__main__":
     load_config()
     init_db()
     monitor = push.PushMonitor() if push is not None else None
-    t = threading.Thread(target=collector_loop, args=(monitor,), daemon=True)
+
+    def _on_recover(name, params):
+        if monitor is not None and getattr(monitor, "enabled", False):
+            monitor.apns.send(
+                f"\U0001f6df {name} auto-recovered",
+                f"It was overheating — reset to {params['frequency']} MHz / "
+                f"{params['coreVoltage']} mV and restarted.",
+                collapse_id=f"recover-{name}")
+
+    recoverer = recover.AutoRecover(on_action=_on_recover) if recover is not None else None
+    t = threading.Thread(target=collector_loop, args=(monitor, recoverer), daemon=True)
     t.start()
     print(f"BitAxe dashboard → http://localhost:{PORT}")
     with http.server.HTTPServer(("", PORT), Handler) as srv:
