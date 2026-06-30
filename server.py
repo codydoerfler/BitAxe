@@ -23,6 +23,18 @@ try:
 except Exception:                    # never let recovery problems break the dashboard
     recover = None
 
+try:
+    import rates                     # configurable electricity rates (region/flat/TOU)
+except Exception:
+    rates = None
+
+try:
+    import benchmark                 # automated overclock sweep
+    BENCH = benchmark.Benchmarker()
+except Exception:
+    benchmark = None
+    BENCH = None
+
 PORT    = 3000
 DIR     = os.path.dirname(os.path.abspath(__file__))
 CFG     = os.path.join(DIR, "config.json")
@@ -285,6 +297,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._get_energy()
         elif p == "/api/firmware/latest":
             self._firmware_latest()
+        elif p == "/api/rates":
+            self._get_rates()
+        elif re.match(r"^/api/miner/(\d+)/benchmark/status$", p):
+            self._benchmark_status(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
         elif re.match(r"^/api/miner/\d+/", self.path):
             self._miner_proxy("GET")
         else:
@@ -306,6 +322,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._update_firmware(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
         elif re.match(r"^/api/miner/(\d+)/safe-reset$", p):
             self._safe_reset(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
+        elif p == "/api/rates":
+            self._set_rates()
+        elif re.match(r"^/api/miner/(\d+)/benchmark/start$", p):
+            self._benchmark_start(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
+        elif re.match(r"^/api/miner/(\d+)/benchmark/stop$", p):
+            self._benchmark_stop(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
+        elif re.match(r"^/api/miner/(\d+)/benchmark/apply-best$", p):
+            self._benchmark_apply_best(int(re.match(r"^/api/miner/(\d+)/", p).group(1)))
         elif re.match(r"^/api/miner/\d+/", self.path):
             self._miner_proxy("POST")
         else:
@@ -402,9 +426,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         miner_ip = cfg["miners"][miner_idx]["ip"]
         import datetime
 
-        # on-peak = weekday (Mon–Fri = strftime %w 1–5), local hour 17–20 (5–9 PM)
+        # Configurable rates (region/flat/TOU); falls back to the original CO TOU.
+        rates_cfg = cfg.get("rates") or (rates.default_rates() if rates else None)
+        oph = rates.on_peak_hours(rates_cfg) if rates else [17, 20]
+
+        # on-peak = weekday (Mon–Fri = strftime %w 1–5), local hour oph[0]–oph[1]
         ON = ("CAST(strftime('%w', ts, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 1 AND 5 "
-              "AND CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER) BETWEEN 17 AND 20")
+              f"AND CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER) BETWEEN {oph[0]} AND {oph[1]}")
 
         conn = sqlite3.connect(DB_PATH)
         cur  = conn.cursor()
@@ -431,12 +459,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         def kwh(p):       # each reading covers POLL_INTERVAL seconds
             return (p * POLL_INTERVAL / 3_600_000) if p else 0.0
-        def rates(day):   # summer = Jun–Sep
+        def rates_for(day):
+            if rates:
+                return rates.resolve(rates_cfg, day)
             return RATE_SUMMER if 6 <= int(day.split("-")[1]) <= 9 else RATE_WINTER
 
         days, counts, costs = [], [], []
         for day, p_on, p_off in rows:
-            r = rates(day)
+            r = rates_for(day)
             on_k, off_k = kwh(p_on), kwh(p_off)
             days.append(day)
             counts.append(round(on_k + off_k, 3))
@@ -449,7 +479,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         days, counts, costs = days[-7:], counts[-7:], costs[-7:]
 
         today  = datetime.date.today()
-        r      = rates(today.isoformat())
+        r      = rates_for(today.isoformat())
         avg_w  = t_avg or 0
         is_wd  = today.weekday() < 5
         # projected full-day cost at today's avg draw (weekday = 4 h on-peak + 20 h off)
@@ -625,6 +655,99 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._respond(502, {"error": str(e), "partial": results})
         self._respond(200, {"ok": bool(results) and all(results.values()),
                             "version": fw.get("version"), "results": results})
+
+    # ── Electricity rates ──────────────────────────────────────────────────────
+
+    def _get_rates(self):
+        if rates is None:
+            return self._respond(503, {"error": "rates module unavailable"})
+        cfg = load_config()
+        cfg_rates = cfg.get("rates") or rates.default_rates()
+        import datetime
+        today = datetime.date.today().isoformat()
+        self._respond(200, {
+            "config":   cfg_rates,
+            "states":   rates.STATE_RATES,
+            "resolved": rates.resolve(cfg_rates, today),
+        })
+
+    def _set_rates(self):
+        if rates is None:
+            return self._respond(503, {"error": "rates module unavailable"})
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            data = json.loads(self.rfile.read(length)) if length else {}
+            clean = rates.validate(data)
+        except (ValueError, KeyError, TypeError) as e:
+            return self._respond(400, {"error": str(e)})
+        cfg = load_config()
+        cfg["rates"] = clean
+        save_config(cfg)
+        self._respond(200, {"ok": True, "config": clean})
+
+    # ── Overclock benchmark ────────────────────────────────────────────────────
+
+    def _benchmark_start(self, idx):
+        if BENCH is None:
+            return self._respond(503, {"error": "benchmark module unavailable"})
+        ip, info = self._miner_ip_info(idx)
+        if ip is None:
+            return self._respond(404, {"error": "miner not found"})
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except Exception:
+            body = {}
+        dry = bool(body.get("dry"))
+        # Default grid centered on the model's presets if none supplied.
+        min_f = int(body.get("min_freq", 450))
+        max_f = int(body.get("max_freq", 600))
+        step  = int(body.get("step_freq", 25))
+        volts = body.get("voltages") or [1100, 1150, 1200]
+        plan  = benchmark.build_plan(min_f, max_f, step, volts)
+        if not plan:
+            return self._respond(400, {"error": "empty plan"})
+        ok = BENCH.start(ip, info or {}, plan, dry=dry,
+                         settle=body.get("settle"), sample=body.get("sample"))
+        if not ok:
+            return self._respond(409, {"error": "a benchmark is already running for this miner"})
+        self._respond(200, {"started": True, "total": len(plan), "dry": dry})
+
+    def _benchmark_status(self, idx):
+        if BENCH is None:
+            return self._respond(503, {"error": "benchmark module unavailable"})
+        ip, _ = self._miner_ip_info(idx)
+        if ip is None:
+            return self._respond(404, {"error": "miner not found"})
+        st = BENCH.status(ip)
+        if not st:
+            return self._respond(200, {"running": False, "results": [], "best": None})
+        self._respond(200, {
+            "running":  st["running"], "dry": st["dry"], "error": st["error"],
+            "progress": st["progress"], "current": st["current"],
+            "original": st["original"], "results": st["results"],
+            "best": st["best"], "applied_best": st["applied_best"],
+        })
+
+    def _benchmark_stop(self, idx):
+        if BENCH is None:
+            return self._respond(503, {"error": "benchmark module unavailable"})
+        ip, _ = self._miner_ip_info(idx)
+        if ip is None:
+            return self._respond(404, {"error": "miner not found"})
+        self._respond(200, {"stopped": BENCH.stop(ip)})
+
+    def _benchmark_apply_best(self, idx):
+        if BENCH is None:
+            return self._respond(503, {"error": "benchmark module unavailable"})
+        ip, _ = self._miner_ip_info(idx)
+        if ip is None:
+            return self._respond(404, {"error": "miner not found"})
+        best = BENCH.apply_best(ip)
+        if best:
+            self._respond(200, {"ok": True, "applied": best})
+        else:
+            self._respond(404, {"error": "no best result to apply"})
 
     # ── Low-level ─────────────────────────────────────────────────────────────
 
