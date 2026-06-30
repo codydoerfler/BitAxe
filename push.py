@@ -26,6 +26,24 @@ TOPIC   = "com.doerfler.bitaxe"
 
 HOT_THRESHOLD = 66.0   # °C — matches the app's red-zone alert threshold
 
+
+def _semver(s):
+    """Leading [major, minor, patch] from a version like 'v2.13.1-dirty'."""
+    if not s:
+        return None
+    import re
+    m = re.match(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(s))
+    if not m:
+        return None
+    return [int(m.group(i) or 0) for i in (1, 2, 3)]
+
+
+def _fw_behind(current, latest):
+    a, b = _semver(current), _semver(latest)
+    if not a or not b:
+        return False
+    return a < b
+
 DIR         = os.path.dirname(os.path.abspath(__file__))
 TOKENS_PATH = os.path.join(DIR, "push_tokens.json")
 
@@ -169,14 +187,16 @@ class PushMonitor:
     def __init__(self):
         self.apns = _APNs()
         self.state = {}   # name -> {"online", "hot", "fault"}
+        self.fw_notified = {}   # name -> latest version we've already announced
         self.enabled = self.apns.available()
         if self.enabled:
             log.info("push: APNs monitor enabled (topic %s)", TOPIC)
         else:
             log.warning("push: APNs unavailable (missing key or deps) — pushes disabled")
 
-    def check(self, miners):
-        """miners: [{"name": str, "online": bool, "info": dict|None}]"""
+    def check(self, miners, latest_fw=None):
+        """miners: [{"name": str, "online": bool, "info": dict|None}].
+        latest_fw: the newest firmware version string, to alert when behind."""
         if not self.enabled:
             return
         for m in miners:
@@ -184,6 +204,16 @@ class PushMonitor:
             online = bool(m["online"])
             info   = m.get("info") or {}
             prev   = self.state.get(name)
+
+            # Firmware-update available — push once per (miner, new version).
+            if online and latest_fw and _fw_behind(info.get("version"), latest_fw) \
+                    and self.fw_notified.get(name) != latest_fw:
+                self.fw_notified[name] = latest_fw
+                self.apns.send(
+                    f"⬆️ Firmware {latest_fw} for {name}",
+                    f"AxeOS {info.get('version') or '?'} → {latest_fw} is available. "
+                    "Open the app to see what's new and update.",
+                    collapse_id=f"fw-{name}")
 
             if prev is not None:
                 if prev["online"] and not online:

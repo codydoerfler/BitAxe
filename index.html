@@ -1068,6 +1068,7 @@
           <span class="miner-name">⚡ ${m.name}</span>
           <span class="miner-ip">${m.ip.replace('http://','')}</span>
           <button class="identify-btn" onclick="identify(${m.index}, this)" ${!online?'disabled':''} title="Flash 'Hi!' on this miner's screen so you can spot it physically">🔍 Identify</button>
+          <button class="identify-btn" onclick="openTune(${m.index}, '${(m.name||'').replace(/['\\]/g,'')}')" ${!online?'disabled':''} title="Auto-tune: find the most efficient overclock">🛠 Tune</button>
           <span class="miner-status ${online?'on':'off'}">${online?'● Online':'● Offline'}</span>
         </div>
         ${renderMinerStrip(m, d, online)}
@@ -1234,8 +1235,12 @@
       html += stripBox(STRIP_PALETTE[s.severity] || STRIP_PALETTE.warning, s.title, s.detail, s.label, s.fn || '');
     });
     if (online && latestFW && firmwareBehind(d.version, latestFW.version)) {
-      html += stripBox(STRIP_PALETTE.warning, 'Firmware update available',
-        `AxeOS ${d.version || '—'} → ${latestFW.version}. Flashes over the air and reboots — keep it powered.`,
+      let detail = `AxeOS ${d.version || '—'} → ${latestFW.version}. Flashes over the air and reboots — keep it powered.`;
+      if (latestFW.notes) {
+        const safe = latestFW.notes.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+        detail += `<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--accent);font-weight:600">What's new in ${latestFW.version}</summary><pre style="white-space:pre-wrap;font:inherit;color:var(--subtle);margin:6px 0 0">${safe}</pre></details>`;
+      }
+      html += stripBox(STRIP_PALETTE.warning, 'Firmware update available', detail,
         'Update firmware', `updateFirmware(${m.index}, this, '${latestFW.version}')`);
     }
     return html;
@@ -1812,6 +1817,40 @@
   <input class="settings-input" id="add-ip" placeholder="IP address (e.g. 192.168.4.155)">
   <button class="settings-add-btn" onclick="addMiner()">Add Miner</button>
   <div class="settings-feedback" id="add-feedback"></div>
+
+  <hr class="settings-divider">
+  <div class="settings-add-title">⚡ Electricity Rate</div>
+  <div class="settings-label" style="margin-bottom:6px;">Used for your energy-cost charts. <span id="rates-now" style="color:var(--green);font-weight:600;"></span></div>
+  <select class="settings-input" id="rates-mode" onchange="ratesModeChanged()">
+    <option value="region">My state (average)</option>
+    <option value="flat">Flat rate (¢/kWh)</option>
+  </select>
+  <div id="rates-region-row">
+    <select class="settings-input" id="rates-state"></select>
+    <button class="settings-add-btn" style="background:var(--blue)" onclick="checkLocationRates(this)">📍 Check current rates</button>
+    <div class="settings-feedback" id="rates-loc-feedback"></div>
+  </div>
+  <div id="rates-flat-row" style="display:none">
+    <input class="settings-input" id="rates-flat" type="number" min="1" max="100" step="0.1" placeholder="e.g. 14.5">
+  </div>
+  <button class="settings-add-btn" onclick="saveRates(this)">Save rate</button>
+  <div class="settings-feedback" id="rates-feedback"></div>
+</div>
+
+<!-- Tune builder modal -->
+<div class="settings-overlay" id="tune-overlay" onclick="closeTune()"></div>
+<div class="settings-panel" id="tune-panel">
+  <div class="settings-head">
+    <h2>🛠 Tune <span id="tune-miner-name"></span></h2>
+    <button class="settings-close" onclick="closeTune()">✕</button>
+  </div>
+  <div class="settings-label">Automatically sweeps frequency/voltage to find the most efficient stable setting. Real runs re-tune the miner repeatedly for several minutes — leave it powered. The original settings are restored at the end unless you apply a result.</div>
+  <label style="display:flex;gap:8px;align-items:center;margin:10px 0;color:var(--text);font-size:13px;"><input type="checkbox" id="tune-sim"> Simulate (no changes to the miner)</label>
+  <button class="settings-add-btn" id="tune-start-btn" onclick="tuneStart(this)">Start sweep</button>
+  <button class="settings-add-btn" id="tune-stop-btn" style="display:none;background:var(--red)" onclick="tuneStop()">Stop &amp; restore</button>
+  <div id="tune-progress" style="margin-top:10px"></div>
+  <div id="tune-best" style="margin-top:10px"></div>
+  <div id="tune-results" style="margin-top:10px"></div>
 </div>
 
 <script>
@@ -1825,11 +1864,118 @@
     document.getElementById('settings-overlay').classList.add('open');
     document.getElementById('settings-panel').classList.add('open');
     await loadSettingsMiners();
+    loadRates();
   }
 
   function closeSettings() {
     document.getElementById('settings-overlay').classList.remove('open');
     document.getElementById('settings-panel').classList.remove('open');
+  }
+
+  /* ── Electricity rates ── */
+  async function loadRates() {
+    try {
+      const r = await fetch('/api/rates'); if (!r.ok) return;
+      const d = await r.json();
+      const sel = document.getElementById('rates-state');
+      if (!sel.options.length && d.states) {
+        Object.keys(d.states).sort().forEach(s => {
+          const o = document.createElement('option');
+          o.value = s; o.textContent = `${s} · ${(d.states[s]*100).toFixed(1)}¢`;
+          sel.appendChild(o);
+        });
+      }
+      const res = d.resolved;
+      document.getElementById('rates-now').textContent = res
+        ? `Now: ${(res.on*100).toFixed(1)}¢/kWh` + (res.on !== res.off ? ` peak · ${(res.off*100).toFixed(1)}¢ off` : '') : '';
+      const c = d.config || {};
+      if (c.mode === 'flat')   { document.getElementById('rates-mode').value = 'flat'; document.getElementById('rates-flat').value = ((c.flat||0.15)*100).toFixed(1); }
+      else if (c.mode === 'region') { document.getElementById('rates-mode').value = 'region'; sel.value = c.region || 'CO'; }
+      ratesModeChanged();
+    } catch (e) { /* offline */ }
+  }
+  function ratesModeChanged() {
+    const m = document.getElementById('rates-mode').value;
+    document.getElementById('rates-region-row').style.display = m === 'region' ? '' : 'none';
+    document.getElementById('rates-flat-row').style.display   = m === 'flat'   ? '' : 'none';
+  }
+  function checkLocationRates(btn) {
+    const fb = document.getElementById('rates-loc-feedback');
+    if (!navigator.geolocation) { fb.textContent = 'Location not available in this browser.'; return; }
+    const orig = btn.textContent; btn.disabled = true; btn.textContent = '📍 Locating…';
+    navigator.geolocation.getCurrentPosition(async pos => {
+      try {
+        const { latitude, longitude } = pos.coords;
+        const g = await (await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`)).json();
+        const code = (g.principalSubdivisionCode || '').split('-')[1];   // "US-CO" → "CO"
+        if (g.countryCode === 'US' && code && document.querySelector(`#rates-state option[value="${code}"]`)) {
+          document.getElementById('rates-mode').value = 'region'; ratesModeChanged();
+          document.getElementById('rates-state').value = code;
+          fb.textContent = `Found ${code} — tap Save rate to use it.`;
+        } else { fb.textContent = 'Could not match your state — pick it manually.'; }
+      } catch (e) { fb.textContent = 'Lookup failed — pick your state manually.'; }
+      finally { btn.disabled = false; btn.textContent = orig; }
+    }, () => { fb.textContent = 'Location permission denied.'; btn.disabled = false; btn.textContent = orig; }, { timeout: 10000 });
+  }
+  async function saveRates(btn) {
+    const fb = document.getElementById('rates-feedback'); const m = document.getElementById('rates-mode').value;
+    let body;
+    if (m === 'flat') {
+      const c = parseFloat(document.getElementById('rates-flat').value || '0');
+      if (!(c > 0)) { fb.textContent = 'Enter a rate in ¢/kWh.'; return; }
+      body = { mode: 'flat', flat: c / 100 };
+    } else { body = { mode: 'region', region: document.getElementById('rates-state').value }; }
+    const orig = btn.textContent; btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/rates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      fb.textContent = r.ok ? 'Saved ✓' : 'Failed'; if (r.ok) { await loadRates(); if (typeof loadEnergy === 'function') loadEnergy(); }
+    } catch (e) { fb.textContent = 'Failed'; } finally { btn.disabled = false; btn.textContent = orig; }
+  }
+
+  /* ── Tune builder (automated overclock sweep) ── */
+  let tuneIdx = null, tunePollTimer = null;
+  function openTune(idx, name) {
+    tuneIdx = idx;
+    document.getElementById('tune-miner-name').textContent = name;
+    document.getElementById('tune-overlay').classList.add('open');
+    document.getElementById('tune-panel').classList.add('open');
+    tuneRefresh(); tunePollTimer = setInterval(tuneRefresh, 3000);
+  }
+  function closeTune() {
+    document.getElementById('tune-overlay').classList.remove('open');
+    document.getElementById('tune-panel').classList.remove('open');
+    clearInterval(tunePollTimer); tuneIdx = null;
+  }
+  async function tuneStart(btn) {
+    const dry = document.getElementById('tune-sim').checked;
+    if (!dry && !confirm('Start a real sweep?\n\nThe miner will be re-tuned through many settings over several minutes and its hashrate will dip. Your original settings are restored at the end unless you apply a result.')) return;
+    btn.disabled = true;
+    try { await fetch(`/api/miner/${tuneIdx}/benchmark/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dry }) }); }
+    finally { btn.disabled = false; tuneRefresh(); }
+  }
+  async function tuneStop() { await fetch(`/api/miner/${tuneIdx}/benchmark/stop`, { method: 'POST' }); tuneRefresh(); }
+  async function tuneApplyBest() { await fetch(`/api/miner/${tuneIdx}/benchmark/apply-best`, { method: 'POST' }); tuneRefresh(); }
+  async function tuneRefresh() {
+    if (tuneIdx == null) return;
+    let st; try { st = await (await fetch(`/api/miner/${tuneIdx}/benchmark/status`)).json(); } catch (e) { return; }
+    const running = st.running;
+    document.getElementById('tune-start-btn').style.display = running ? 'none' : '';
+    document.getElementById('tune-stop-btn').style.display  = running ? '' : 'none';
+    const prog = document.getElementById('tune-progress');
+    if (running && st.progress) {
+      const c = st.current ? `${st.current.frequency}/${st.current.coreVoltage} — ${st.current.phase}` : '';
+      prog.innerHTML = `<div style="color:var(--accent);font-weight:600">${st.progress.done}/${st.progress.total} tested${st.dry ? ' (sim)' : ''}</div><div style="color:var(--subtle)">${c}</div>`;
+    } else prog.innerHTML = '';
+    const bestEl = document.getElementById('tune-best');
+    if (st.best) {
+      bestEl.innerHTML = `<div style="padding:10px;border:1px solid var(--green);border-radius:8px"><b style="color:var(--green)">Best: ${st.best.frequency}/${st.best.coreVoltage}</b> · ${st.best.efficiency} GH/W · ${st.best.temp}°C<br><button class="settings-add-btn" style="margin-top:6px;background:var(--green)" onclick="tuneApplyBest()" ${running ? 'disabled' : ''}>Apply best</button></div>`;
+    } else bestEl.innerHTML = '';
+    const res = document.getElementById('tune-results');
+    if (st.results && st.results.length) {
+      const rows = st.results.slice().sort((a, b) => (b.efficiency || -1) - (a.efficiency || -1)).map(r =>
+        `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--subtle);padding:2px 0"><span>${r.stable ? '✓' : '✕'} ${r.frequency}/${r.coreVoltage}</span><span>${r.hashrate || '—'} GH/s · ${r.temp || '—'}° · ${r.efficiency || '—'} GH/W</span></div>`).join('');
+      res.innerHTML = `<div class="settings-label" style="margin-top:8px">Results (most efficient first)</div>${rows}`;
+    } else res.innerHTML = '';
   }
 
   async function loadSettingsMiners() {
