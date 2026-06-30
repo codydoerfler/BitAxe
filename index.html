@@ -761,6 +761,21 @@
     .identify-btn:disabled { opacity: .4; cursor: default; }
     .identify-btn.flashing { border-color: var(--accent); color: var(--accent); background: var(--accent-lo); }
 
+    /* Per-miner suggestion / firmware banner */
+    .miner-strip {
+      display: flex; align-items: center; gap: 12px;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 10px 12px; margin-bottom: 12px;
+    }
+    .strip-btn {
+      flex: none; background: transparent;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: 12px; font-weight: 600; padding: 7px 12px;
+      cursor: pointer; white-space: nowrap; transition: all .15s;
+    }
+    .strip-btn:hover:not(:disabled) { filter: brightness(1.25); }
+    .strip-btn:disabled { opacity: .6; cursor: default; }
+
     /* Combined / fleet summary block reuses .miner-block styling */
     .combined-name { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; color: var(--accent); }
   </style>
@@ -1055,6 +1070,7 @@
           <button class="identify-btn" onclick="identify(${m.index}, this)" ${!online?'disabled':''} title="Flash 'Hi!' on this miner's screen so you can spot it physically">🔍 Identify</button>
           <span class="miner-status ${online?'on':'off'}">${online?'● Online':'● Offline'}</span>
         </div>
+        ${renderMinerStrip(m, d, online)}
         <div class="grid">
           <div class="card accent-orange">
             <div class="card-label"><span class="icon">⚡</span> Hashrate <span class="info" data-tip="This miner's current mining speed. The bar compares it to the chip's expected hashrate at its frequency.">i</span></div>
@@ -1144,6 +1160,110 @@
     if (hn) hn.textContent = `${onlineCount} miner${onlineCount!==1?'s':''} online · ${tHr} ${tHrU} combined`;
 
     return { combinedHR, ref, bestDiffMax };
+  }
+
+  /* ── Smart suggestions + firmware (mirrors the app's MinerService) ── */
+  let latestFW = null;
+  async function loadFirmwareLatest() {
+    try {
+      const r = await fetch('/api/firmware/latest');
+      if (r.ok) latestFW = await r.json();
+    } catch (e) { /* offline — just skip the update prompt */ }
+  }
+
+  function semver(s) {
+    if (!s) return null;
+    const m = String(s).replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    if (!m) return null;
+    return [+m[1] || 0, +m[2] || 0, +m[3] || 0];
+  }
+  function firmwareBehind(cur, latest) {
+    const a = semver(cur), b = semver(latest);
+    if (!a || !b) return false;
+    for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] < b[i]; }
+    return false;
+  }
+
+  // Returns [{title, detail, severity, label, fn}] — severity: critical|warning.
+  function minerSuggestions(m, d, online) {
+    if (!online) {
+      return [{ title: `${m.name} is offline`, severity: 'critical',
+        detail: "It isn't responding. Check its power and Wi-Fi — if it just rebooted, give it a minute.",
+        label: null }];
+    }
+    const out = [];
+    const hr = getCleanHashrate(d) || 0;
+    if (d.overheat_mode) {
+      out.push({ title: 'Overheated — ASIC halted', severity: 'critical',
+        detail: 'AxeOS stopped hashing to protect the chip. Reset to safe settings and restart, then check airflow.',
+        label: 'Reset to safe settings', fn: `safeReset(${m.index}, this)` });
+    } else if (d.temp != null && d.temp >= 66) {
+      out.push({ title: `Running hot at ${d.temp.toFixed(0)}°C`, severity: 'warning',
+        detail: "Lower the fan's target temperature to cool it down. If it stays hot, reset to safe tuning.",
+        label: 'Cool it down', fn: `coolDown(${m.index}, this)` });
+    }
+    if (d.power_fault) {
+      out.push({ title: 'Power fault', severity: 'critical',
+        detail: `AxeOS reported ${d.power_fault}. Check the PSU (5 V, 5 A / 25 W+) and cable, then restart to clear it.`,
+        label: 'Restart miner', fn: `restartMiner(${m.index}, this)` });
+    }
+    if (hr > 0 && hr < 1000 && !d.overheat_mode && !d.power_fault) {
+      const [v, u] = fmtHashrate(hr);
+      out.push({ title: `Low hashrate (${v} ${u})`, severity: 'warning',
+        detail: 'Below 1 TH/s. An unstable overclock usually hashes slower; resetting to conservative tuning typically restores it.',
+        label: 'Reset to safe settings', fn: `safeReset(${m.index}, this)` });
+    }
+    return out;
+  }
+
+  // Per-miner banner: suggestions + a firmware-update prompt when behind.
+  const STRIP_PALETTE = {
+    critical: { fg: '#ef4444', bg: 'rgba(239,68,68,0.08)',  bd: 'rgba(239,68,68,0.40)' },
+    warning:  { fg: '#f7931a', bg: 'rgba(247,147,26,0.08)', bd: 'rgba(247,147,26,0.40)' },
+  };
+  function stripBox(p, title, detail, btnLabel, onclick) {
+    const btn = btnLabel
+      ? `<button class="strip-btn" style="border-color:${p.fg};color:${p.fg}" onclick="${onclick}">${btnLabel}</button>` : '';
+    return `<div class="miner-strip" style="border-color:${p.bd};background:${p.bg}">
+      <div style="flex:1"><div style="color:${p.fg};font-weight:600;font-size:13px">${title}</div>
+      <div style="color:var(--subtle);font-size:11px;margin-top:2px">${detail}</div></div>${btn}</div>`;
+  }
+  function renderMinerStrip(m, d, online) {
+    let html = '';
+    minerSuggestions(m, d, online).forEach(s => {
+      html += stripBox(STRIP_PALETTE[s.severity] || STRIP_PALETTE.warning, s.title, s.detail, s.label, s.fn || '');
+    });
+    if (online && latestFW && firmwareBehind(d.version, latestFW.version)) {
+      html += stripBox(STRIP_PALETTE.warning, 'Firmware update available',
+        `AxeOS ${d.version || '—'} → ${latestFW.version}. Flashes over the air and reboots — keep it powered.`,
+        'Update firmware', `updateFirmware(${m.index}, this, '${latestFW.version}')`);
+    }
+    return html;
+  }
+
+  // Shared button-state wrapper for the strip actions.
+  async function stripAction(btn, workingText, fn, settleMs = 4000) {
+    if (!btn) return;
+    const orig = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = workingText;
+    try {
+      const ok = await fn();
+      btn.innerHTML = ok ? '✓ Done' : '✕ Failed';
+    } catch (e) { btn.innerHTML = '✕ Failed'; }
+    finally { setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, settleMs); }
+  }
+  const _post = (url, body) => fetch(url, body
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : { method: 'POST' }).then(r => r.ok);
+  const _patch = (url, body) => fetch(url, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.ok);
+
+  function safeReset(idx, btn)    { stripAction(btn, '⏳ Resetting…',  () => _post(`/api/miner/${idx}/safe-reset`)); }
+  function coolDown(idx, btn)     { stripAction(btn, '⏳ Cooling…',    () => _patch(`/api/miner/${idx}/api/system`, { autofanspeed: 1, temptarget: 55 })); }
+  function restartMiner(idx, btn) { stripAction(btn, '⏳ Restarting…', () => _post(`/api/miner/${idx}/api/system/restart`)); }
+  function updateFirmware(idx, btn, ver) {
+    if (!confirm(`Update this miner to ${ver}?\n\nFlashes the latest AxeOS over the air. It takes a couple of minutes and the miner reboots itself — keep it powered the whole time.`)) return;
+    stripAction(btn, '⏳ Updating… don’t unplug', () => _post(`/api/miner/${idx}/update-firmware`, { which: 'both' }), 8000);
   }
 
   /* ── Identify: flash "Hi!" on the miner's screen (AxeOS console behavior) ── */
@@ -1670,9 +1790,11 @@
     loadHistory(currentHours);
     loadTickets();
     loadEnergy();
+    loadFirmwareLatest();
     setInterval(() => loadHistory(currentHours), 60 * 1000);
     setInterval(loadTickets, 60 * 1000);
     setInterval(loadEnergy, 60 * 1000);
+    setInterval(loadFirmwareLatest, 6 * 60 * 60 * 1000); // refresh latest-FW twice a day
   });
 </script>
 
