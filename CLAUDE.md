@@ -11,7 +11,7 @@ Runs on a Raspberry Pi 5 and is viewed locally, over Tailscale, or publicly via 
 ## What's here
 - `server.py` — Python `http.server` on **port 3000**. Serves `index.html` and proxies
   miner APIs. Endpoints: `/api/system/info`, `/api/miners`, `/api/history`, `/api/btc-price`,
-  `/api/pi-temp`, `/api/tickets`, `/api/energy`, `/api/miner/<n>/...`.
+  `/api/pi-temp`, `/api/tickets`, `/api/energy`, `/api/fun-state`, `/api/miner/<n>/...`.
 - `index.html` — the whole UI (single file, ~70 KB). Multi-miner: per-miner cards,
   combined summary, core-voltage card, Identify button.
 - `config.json` — miner list (gitignored). Shape:
