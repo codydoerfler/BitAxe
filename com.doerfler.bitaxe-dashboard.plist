@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- BitAxe dashboard LaunchAgent — the macOS (Mac mini) equivalent of the old
+     Raspberry Pi systemd unit (bitaxe-dashboard.service). It starts the server
+     at login and relaunches it if it exits.
+
+     Don't edit the {{PYTHON}} / {{REPO_DIR}} placeholders by hand — run
+     "Install Dashboard Autostart.command", which fills them in for this Mac and
+     loads the agent. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>             <string>com.doerfler.bitaxe-dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{PYTHON}}</string>
+    <string>{{REPO_DIR}}/server.py</string>
+  </array>
+  <key>WorkingDirectory</key>  <string>{{REPO_DIR}}</string>
+  <key>RunAtLoad</key>         <true/>
+  <key>KeepAlive</key>         <true/>
+  <key>StandardOutPath</key>   <string>{{REPO_DIR}}/dashboard.log</string>
+  <key>StandardErrorPath</key> <string>{{REPO_DIR}}/dashboard.log</string>
+</dict>
+</plist>

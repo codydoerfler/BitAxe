@@ -1,3 +1,6 @@
+# LEGACY — Raspberry Pi systemd unit. The dashboard now runs on the Mac mini
+# via a launchd LaunchAgent; see "Install Dashboard Autostart.command" and
+# com.doerfler.bitaxe-dashboard.plist. Kept for reference only.
 [Unit]
 Description=BitAxe Dashboard
 After=network.target
