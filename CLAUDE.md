@@ -29,8 +29,9 @@ leftovers, now marked LEGACY; see below.)
 
 ## Miners & hosts
 - BitAxe 1: `http://192.168.4.154`  •  BitAxe 2: `http://192.168.4.159`
-- Host: the **Mac mini** runs the server on port 3000. _(TODO: confirm its LAN/Tailscale
-  address here — the old `raspberrypi.local` / `100.94.9.23` entries were the Pi's.)_
+- Host: the **Mac mini** (`codys-mac-mini`) runs the server on port 3000.
+  Tailscale `100.64.112.105` (MagicDNS: `codys-mac-mini`). _(The old
+  `raspberrypi.local` / `100.94.9.23` / `100.80.87.42` entries were the Pi's.)_
 - Public URL: `https://bitaxe.rrwestminster.com` (Cloudflare tunnel → host :3000).
 
 ## Run / deploy
