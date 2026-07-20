@@ -96,8 +96,67 @@ def init_db():
     except Exception:
         pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_miner_ts ON readings(miner_ip, ts)")
+    # Small key/value store for browser-independent UI state (fun-card streak +
+    # first-seen date). Lives in history.db so it survives a re-flash via the
+    # Pi Forge backup, same as the chart history.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     conn.commit()
     conn.close()
+
+
+def get_state(key, default=None):
+    conn = sqlite3.connect(DB_PATH)
+    row  = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else default
+
+
+def set_state(key, value):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT INTO app_state (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (key, str(value)))
+    conn.commit()
+    conn.close()
+
+
+def update_fun_state(all_online):
+    """Advance the server-side fun-card state once per collector cycle so the
+    Uptime Streak and Luck-o-Meter persist across browsers and reboots.
+
+    Streak = consecutive days where every configured miner was online at every
+    check; it resets the moment a check sees anything offline. `firstSeen` is
+    stamped on the first ever cycle and anchors the Luck-o-Meter's expectation.
+    """
+    now = int(time.time())
+    if get_state("firstSeen") is None:
+        set_state("firstSeen", now)
+
+    start = get_state("streak.start")
+    if not all_online or start is None:
+        start = now
+        set_state("streak.start", now)
+    current = max(0, (now - int(start)) // 86400)
+    best = max(current, int(get_state("streak.best", 0)))
+    set_state("streak.best", best)
+
+
+def read_fun_state():
+    """Current fun-card state for the UI (all values browser-independent)."""
+    first = get_state("firstSeen")
+    start = get_state("streak.start")
+    now   = int(time.time())
+    current = max(0, (now - int(start)) // 86400) if start else 0
+    return {
+        "firstSeen":     int(first) if first else None,
+        "streakCurrent": current,
+        "streakBest":    int(get_state("streak.best", 0)),
+    }
 
 
 def record_reading(miner_ip, d):
@@ -260,6 +319,12 @@ def collector_loop(monitor=None, recoverer=None):
                 info = None
             snapshot.append({"name": miner["name"], "ip": miner["ip"],
                              "online": info is not None, "info": info})
+        # Browser-independent fun-card state (streak + first-seen).
+        try:
+            all_online = bool(snapshot) and all(s["online"] for s in snapshot)
+            update_fun_state(all_online)
+        except Exception as e:
+            print(f"fun-state error: {e}")
         if monitor is not None:
             try:
                 fw = fetch_latest_firmware() or {}
@@ -302,6 +367,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._get_energy()
         elif p == "/api/firmware/latest":
             self._firmware_latest()
+        elif p == "/api/fun-state":
+            self._respond(200, read_fun_state())
         elif p == "/api/rates":
             self._get_rates()
         elif re.match(r"^/api/miner/(\d+)/benchmark/status$", p):
