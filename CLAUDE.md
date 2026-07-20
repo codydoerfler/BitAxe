@@ -24,6 +24,11 @@ leftovers, now marked LEGACY; see below.)
 - **macOS run scripts** (Mac mini): `Start Dashboard.command` (launch now),
   `Install Dashboard Autostart.command` + `com.doerfler.bitaxe-dashboard.plist`
   (install as a login LaunchAgent), `Restart Dashboard.command` (restart after a code update).
+- **Auto-update** (Mac mini): `auto-update.sh` + `com.doerfler.bitaxe-dashboard-autoupdate.plist`
+  — a second LaunchAgent that polls GitHub every 2 min and, when new commits land on
+  the tracked branch, fast-forwards the checkout and restarts the server. This is what
+  makes "merge on GitHub" go live with no manual step. Installed by the same
+  `Install Dashboard Autostart.command`. Logs to `auto-update.log`.
 - **Pi leftovers (LEGACY):** `Deploy to Pi.command`, `bitaxe-dashboard.service` — from the
   Raspberry Pi era; not used on the Mac mini.
 
@@ -37,15 +42,27 @@ leftovers, now marked LEGACY; see below.)
 ## Run / deploy
 The dashboard runs on the Mac mini from this repo checkout, so a "deploy" is just
 updating the files in place and restarting the server — no scp.
+
+**Once auto-update is installed (see below), there's nothing to do:** merge to the
+tracked branch on GitHub and within ~2 min the mini pulls it and restarts itself.
+Then hard-refresh the browser (⌘⇧R). The manual paths below are for local dev or if
+you ever turn auto-update off.
+
 - Local test: `python3 server.py`, then open `http://localhost:3000`.
-- Update + restart on the mini:
+- Manual update + restart on the mini:
   1. `git pull` (or check out the branch you want to run).
   2. Double-click **`Restart Dashboard.command`** (or run it). It kickstarts the
      LaunchAgent if installed, otherwise stops/relaunches `server.py`.
   3. Hard-refresh the browser (⌘⇧R).
-- First-time autostart: run **`Install Dashboard Autostart.command`** once to register
-  the launchd LaunchAgent (starts at login, relaunches on crash — the mac equivalent of
-  the old Pi systemd unit).
+- **First-time setup — run `Install Dashboard Autostart.command` once.** It installs
+  *both* LaunchAgents: the server (starts at login, relaunches on crash — the mac
+  equivalent of the old Pi systemd unit) **and** the auto-updater (polls GitHub every
+  2 min, pulls + restarts on new commits). After this, deploys are hands-off.
+  - The auto-updater fast-forwards only. If the mini's checkout has local edits that
+    can't fast-forward, it logs a warning to `auto-update.log` and leaves the files
+    alone rather than clobbering them — resolve by hand and it resumes next tick.
+  - The mini follows whatever branch is checked out (normally `main`), so merge your
+    work to `main` for it to pick up automatically.
 
 ## Notes
 - Git history lives in this repo on the Mac; the mini runs from a checkout of it.

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- BitAxe dashboard AUTO-UPDATE LaunchAgent. Runs auto-update.sh on a timer:
+     it checks GitHub for new commits on the tracked branch and, when it finds
+     any, fast-forwards the checkout and restarts the server LaunchAgent. That's
+     what makes "merge on GitHub" show up on the live site with no manual step.
+
+     Don't edit the {{REPO_DIR}} placeholder by hand — run
+     "Install Dashboard Autostart.command", which fills it in for this Mac and
+     loads both this agent and the server agent. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>             <string>com.doerfler.bitaxe-dashboard-autoupdate</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>{{REPO_DIR}}/auto-update.sh</string>
+  </array>
+  <key>WorkingDirectory</key>  <string>{{REPO_DIR}}</string>
+  <!-- Run at load and then every 120s. -->
+  <key>RunAtLoad</key>         <true/>
+  <key>StartInterval</key>     <integer>120</integer>
+  <key>StandardOutPath</key>   <string>{{REPO_DIR}}/auto-update.log</string>
+  <key>StandardErrorPath</key> <string>{{REPO_DIR}}/auto-update.log</string>
+</dict>
+</plist>
