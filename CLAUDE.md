@@ -32,5 +32,10 @@ Runs on a Raspberry Pi 5 and is viewed locally, over Tailscale, or publicly via 
   (Pi Forge's "Rebuild Stack" also deploys these.)
 
 ## Notes
+- The Prospector guide site (sales page + user guide, includes a "Technical Annex" that
+  documents this dashboard's remote-access setup) lives in `~/dev/BitAxeApp/docs/site/`.
+  If a dashboard change affects app-facing behavior or the annex content, update that
+  template, run its `build.py`, and republish the artifact — instructions in
+  `~/dev/BitAxeApp/CLAUDE.md` under "Docs & the guide site".
 - The Pi copy is a plain file copy, not a git checkout — git history lives only here on the Mac.
 - `history.db` is now included in the Pi Forge credentials backup, so chart history survives a re-flash.
