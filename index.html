@@ -904,6 +904,11 @@
     <div class="offline-retry-dot"></div>
     <span>Retrying in <span id="offline-countdown">30</span>s</span>
   </div>
+  <div id="network-check-panel" style="margin-top:16px;max-width:420px;text-align:left;">
+    <button class="settings-btn" id="network-check-btn" onclick="runNetworkCheck()"
+            style="width:auto;padding:8px 16px;">🔍 Check network</button>
+    <div id="network-check-result" style="margin-top:10px;font-size:13px;line-height:1.5;"></div>
+  </div>
 </div>
 
 <div class="header">
@@ -1084,6 +1089,7 @@
   let timer;
   let failStreak  = 0;
   let lastSeenAt  = null;
+  let lastNetworkCheck = null;  // most recent /api/miners network_check diagnosis, if any
 
   /* ── Helpers ── */
   function fmtHashrate(ghps) {
@@ -1701,10 +1707,52 @@
     ls.textContent = lastSeenAt
       ? `Last seen at ${lastSeenAt.toLocaleTimeString()}`
       : 'No successful connection yet this session';
+    // Auto-run the network diagnosis once so the user sees the likely cause
+    // right away instead of needing to tap the button themselves.
+    if (!splash.dataset.autoChecked) {
+      splash.dataset.autoChecked = '1';
+      runNetworkCheck();
+    }
   }
 
   function hideOfflineSplash() {
     document.getElementById('offline-splash').classList.remove('show');
+    const resultEl = document.getElementById('network-check-result');
+    if (resultEl) resultEl.innerHTML = '';
+    document.getElementById('offline-splash').dataset.autoChecked = '';
+  }
+
+  /* ── On-demand network diagnosis (helps self-fix "miners unreachable") ── */
+  async function runNetworkCheck() {
+    const btn = document.getElementById('network-check-btn');
+    const resultEl = document.getElementById('network-check-result');
+    btn.disabled = true;
+    btn.textContent = '🔍 Checking…';
+    resultEl.innerHTML = '';
+    try {
+      const r = await fetch('/api/network-check', { cache: 'no-store' });
+      const d = await r.json();
+      lastNetworkCheck = d;
+      const rows = (d.miners || []).map(m => {
+        const dot = m.reachable ? '🟢' : '🔴';
+        const subnetNote = m.same_subnet_as_host
+          ? ''
+          : ` <span style="color:#f66;">(different subnet: ${m.miner_subnet || '?'})</span>`;
+        return `<div>${dot} ${m.name} — ${m.ip}${subnetNote}</div>`;
+      }).join('');
+      resultEl.innerHTML = `
+        <div style="margin-bottom:8px;"><b>This Mac:</b> ${(d.host_ips || []).join(', ') || 'unknown'}
+          &nbsp;(${(d.host_subnets || []).join(', ') || 'unknown'})</div>
+        ${rows}
+        <div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.08);border-radius:8px;">
+          ${d.diagnosis}
+        </div>`;
+    } catch (e) {
+      resultEl.innerHTML = `<div style="color:#f66;">Check failed: ${e.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🔍 Check network';
+    }
   }
 
   function syncOfflineCountdown(secs) {
@@ -1721,6 +1769,16 @@
       if (!Array.isArray(miners) || miners.length === 0) throw new Error('no miners');
       const { combinedHR, ref, bestDiffMax, onlineCount, minerCount } = renderMiners(miners);
       FLEET = deriveFleet(combinedHR, ref, bestDiffMax, onlineCount, minerCount);
+      if (onlineCount === 0 && minerCount > 0) {
+        // Every configured miner failed — fetch the network diagnosis
+        // separately (kept off the stable /api/miners contract so native
+        // app clients aren't affected) and surface it via the offline splash.
+        try {
+          const nr = await fetch('/api/network-check', { cache: 'no-store' });
+          lastNetworkCheck = nr.ok ? await nr.json() : null;
+        } catch (_) { lastNetworkCheck = null; }
+        throw new Error(lastNetworkCheck ? 'all miners unreachable' : 'no miners online');
+      }
       // Server-tracked streak + first-seen (browser-independent). Non-fatal:
       // an older server without the endpoint just leaves funState null and the
       // fun card falls back to per-browser localStorage.
@@ -1740,7 +1798,10 @@
       failStreak++;
       setStatus('error');
       const banner = document.getElementById('error-banner');
-      banner.textContent = `Could not reach miners — ${err.message}. Retrying in ${INTERVAL}s.`;
+      const diagMsg = lastNetworkCheck && lastNetworkCheck.diagnosis
+        ? ` ${lastNetworkCheck.diagnosis}`
+        : '';
+      banner.textContent = `Could not reach miners — ${err.message}.${diagMsg} Retrying in ${INTERVAL}s.`;
       banner.classList.add('show');
       if (failStreak >= 2) showOfflineSplash();
     }
