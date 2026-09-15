@@ -229,6 +229,115 @@ def query_history(miner_ip, hours):
     return result
 
 
+# ── Network diagnosis (helps user self-fix "miners unreachable") ─────────────
+
+import socket
+import ipaddress
+import concurrent.futures
+
+
+def _local_ipv4_addrs():
+    """Best-effort list of this host's non-loopback IPv4 addresses, via a UDP
+    connect trick (works without extra deps, doesn't actually send packets)."""
+    addrs = set()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        addrs.add(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    # Also try hostname-based resolution as a fallback / supplement.
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                addrs.add(ip)
+    except Exception:
+        pass
+    return sorted(addrs)
+
+
+def _tcp_probe(ip, port=80, timeout=1.5):
+    """Fast raw TCP connect check — much quicker than a full HTTP request,
+    good enough to tell 'reachable on this network' vs 'not reachable'."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def network_diagnosis(miners):
+    """Compare this host's subnet(s) against each configured miner's subnet,
+    and do a quick parallel reachability probe. Returns a structured report
+    the dashboard can render as a plain-English fix-it banner."""
+    host_ips = _local_ipv4_addrs()
+    host_subnets = []
+    for ip in host_ips:
+        try:
+            host_subnets.append(str(ipaddress.ip_network(ip + "/24", strict=False)))
+        except Exception:
+            pass
+
+    def check_one(m):
+        ip = m["ip"].replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+        reachable = _tcp_probe(ip, 80, timeout=1.5)
+        same_subnet = False
+        try:
+            miner_net = str(ipaddress.ip_network(ip + "/24", strict=False))
+            same_subnet = miner_net in host_subnets
+        except Exception:
+            miner_net = None
+        return {
+            "name": m["name"],
+            "ip": ip,
+            "reachable": reachable,
+            "same_subnet_as_host": same_subnet,
+            "miner_subnet": miner_net,
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(miners))) as ex:
+        results = list(ex.map(check_one, miners))
+
+    all_unreachable = len(results) > 0 and all(not r["reachable"] for r in results)
+    any_subnet_mismatch = any(not r["same_subnet_as_host"] for r in results)
+
+    if all_unreachable and any_subnet_mismatch:
+        diagnosis = (
+            "This Mac is on a different network than your miners. "
+            "Mac subnet(s): {host} — miner(s) expect: {miner}. "
+            "Check the Mac's Wi-Fi network (System Settings > Wi-Fi) and confirm "
+            "it matches the network your Bitaxe miners are plugged into."
+        ).format(
+            host=", ".join(host_subnets) or "unknown",
+            miner=", ".join(sorted({r["miner_subnet"] for r in results if r["miner_subnet"]})) or "unknown",
+        )
+    elif all_unreachable:
+        diagnosis = (
+            "All configured miners are unreachable, but this Mac appears to be "
+            "on the same subnet. Check that the miners are powered on and "
+            "connected to Wi-Fi/Ethernet."
+        )
+    elif any_subnet_mismatch:
+        diagnosis = (
+            "Some miners are on a different subnet than this Mac but still "
+            "responded — double check your network setup, this may be "
+            "intermittent."
+        )
+    else:
+        diagnosis = "Network looks fine — this Mac and all configured miners are on the same subnet."
+
+    return {
+        "host_ips": host_ips,
+        "host_subnets": host_subnets,
+        "miners": results,
+        "all_unreachable": all_unreachable,
+        "subnet_mismatch": any_subnet_mismatch,
+        "diagnosis": diagnosis,
+    }
+
+
 # ── Host health ────────────────────────────────────────────────────────────────
 
 def _macos_mem_pct():
@@ -359,6 +468,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._host_load()
         elif p == "/api/miners":
             self._get_miners()
+        elif p == "/api/network-check":
+            self._network_check()
         elif p == "/api/history":
             self._get_history()
         elif p == "/api/tickets":
@@ -418,17 +529,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _get_miners(self):
         cfg = load_config()
-        results = []
-        for i, miner in enumerate(cfg["miners"]):
+
+        def poll_one(item):
+            i, miner = item
             try:
                 with urllib.request.urlopen(miner["ip"] + "/api/system/info", timeout=5) as r:
                     info = json.load(r)
-                results.append({"index": i, "name": miner["name"],
-                                "ip": miner["ip"], "online": True, "info": info})
+                return {"index": i, "name": miner["name"],
+                        "ip": miner["ip"], "online": True, "info": info}
             except Exception:
-                results.append({"index": i, "name": miner["name"],
-                                "ip": miner["ip"], "online": False, "info": None})
+                return {"index": i, "name": miner["name"],
+                        "ip": miner["ip"], "online": False, "info": None}
+
+        miners = list(enumerate(cfg["miners"]))
+        if miners:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(miners)) as ex:
+                results = list(ex.map(poll_one, miners))
+            results.sort(key=lambda r: r["index"])
+        else:
+            results = []
+
+        # Always return a bare array — this is a stable public API contract
+        # consumed by the iOS/macOS apps (MinerService, FleetFetcher,
+        # NetworkScanner all decode [MinerEntry] directly). Diagnosis info
+        # lives at the dedicated /api/network-check endpoint instead, which
+        # every client can call independently when it sees all-offline.
         self._respond(200, results)
+
+    def _network_check(self):
+        cfg = load_config()
+        try:
+            self._respond(200, network_diagnosis(cfg["miners"]))
+        except Exception as e:
+            self._respond(500, {"error": str(e)})
 
     def _get_tickets(self):
         qs        = parse_qs(urlparse(self.path).query)
